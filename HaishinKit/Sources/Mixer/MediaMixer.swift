@@ -268,6 +268,7 @@ public final actor MediaMixer {
     /// }
     /// ```
     public func setFrameRate(_ frameRate: Float64) throws {
+        self.frameRate = frameRate
         switch videoMixerSettings.mode {
         case .passthrough:
             if #available(tvOS 17.0, *) {
@@ -276,6 +277,14 @@ public final actor MediaMixer {
         case .offscreen:
             Task { @ScreenActor in
                 displayLink.preferredFramesPerSecond = Int(frameRate)
+            }
+        }
+        
+        Task {
+            for output in outputs {
+                if let stream = output as? (any StreamConvertible) {
+                    await stream.setExpectedFrameRate(frameRate)
+                }
             }
         }
     }

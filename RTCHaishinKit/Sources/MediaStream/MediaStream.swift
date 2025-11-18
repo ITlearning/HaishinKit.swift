@@ -93,6 +93,10 @@ extension MediaStream: _Stream {
         }
         outgoing.videoSettings = videoSettings
     }
+    
+    public func setExpectedFrameRate(_ frameRate: Float64) async {
+        outgoing.setExpectedFrameRate(frameRate)
+    }
 
     public func append(_ sampleBuffer: CMSampleBuffer) {
         switch sampleBuffer.formatDescription?.mediaType {

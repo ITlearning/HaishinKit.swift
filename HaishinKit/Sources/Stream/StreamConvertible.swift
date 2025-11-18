@@ -28,6 +28,9 @@ public protocol StreamConvertible: Actor, MediaMixerOutput {
 
     /// Sets the video input buffer counts.
     func setVideoInputBufferCounts(_ videoInputBufferCounts: Int)
+    
+    /// Sets the expected frame rate for video encoding.
+    func setExpectedFrameRate(_ frameRate: Float64) async
 
     /// Appends a CMSampleBuffer.
     /// - Parameters:
