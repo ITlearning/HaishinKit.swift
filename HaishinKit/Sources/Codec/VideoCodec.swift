@@ -25,7 +25,6 @@ final class VideoCodec {
         }
     }
     var frameInterval = VideoCodec.frameInterval
-    var expectedFrameRate = MediaMixer.defaultFrameRate
     private var startedAt: CMTime = .zero
     private var continuation: AsyncStream<CMSampleBuffer>.Continuation?
     private var invalidateSession = true

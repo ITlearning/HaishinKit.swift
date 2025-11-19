@@ -139,12 +139,6 @@ extension SRTStream: _Stream {
         }
         outgoing.videoSettings = videoSettings
     }
-    
-    public func setExpectedFrameRate(_ frameRate: Float64) async {
-        // Updates VideoCodec.expectedFrameRate for VideoToolbox encoder optimization.
-        // Note: SRT uses TS format which doesn't include framerate in metadata.
-        outgoing.setExpectedFrameRate(frameRate)
-    }
 
     public func append(_ sampleBuffer: CMSampleBuffer) {
         switch sampleBuffer.formatDescription?.mediaType {

@@ -59,12 +59,7 @@ package final class OutgoingStream {
     
     /// The expected frame rate for video encoding.
     package var expectedFrameRate: Float64 {
-        videoCodec.expectedFrameRate
-    }
-    
-    /// Sets the expected frame rate for video encoding.
-    package func setExpectedFrameRate(_ frameRate: Float64) {
-        videoCodec.expectedFrameRate = frameRate
+        videoSettings.expectedFrameRate
     }
 
     private var audioCodec = AudioCodec()

@@ -7,7 +7,7 @@ import UIKit
 
 /// An actor that mixies audio and video for streaming.
 public final actor MediaMixer {
-    static let defaultFrameRate: Float64 = 30
+    public static let defaultFrameRate: Float64 = 30
 
     /// The error domain codes.
     public enum Error: Swift.Error {
@@ -281,11 +281,7 @@ public final actor MediaMixer {
         }
         
         Task {
-            for output in outputs {
-                if let stream = output as? (any StreamConvertible) {
-                    await stream.setExpectedFrameRate(frameRate)
-                }
-            }
+            await synchronizeFrameRateToStreams()
         }
     }
 
@@ -367,6 +363,12 @@ public final actor MediaMixer {
             return
         }
         outputs.append(output)
+        
+        Task {
+            if let stream = output as? (any StreamConvertible) {
+                await synchronizeFrameRateToStream(stream)
+            }
+        }
     }
 
     /// Removes an output observer.
@@ -376,6 +378,24 @@ public final actor MediaMixer {
         }
     }
 
+    /// Synchronizes the current frame rate to all stream outputs.
+    private func synchronizeFrameRateToStreams() async {
+        for output in outputs {
+            if let stream = output as? (any StreamConvertible) {
+                var videoSettings = await stream.videoSettings
+                videoSettings.expectedFrameRate = frameRate
+                try? await stream.setVideoSettings(videoSettings)
+            }
+        }
+    }
+    
+    /// Synchronizes the current frame rate to a single stream output.
+    private func synchronizeFrameRateToStream(_ stream: any StreamConvertible) async {
+        var videoSettings = await stream.videoSettings
+        videoSettings.expectedFrameRate = frameRate
+        try? await stream.setVideoSettings(videoSettings)
+    }
+    
     private func setVideoRenderingMode(_ mode: VideoMixerSettings.Mode) {
         guard isRunning else {
             return
