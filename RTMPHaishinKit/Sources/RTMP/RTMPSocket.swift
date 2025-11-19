@@ -207,6 +207,41 @@ final actor RTMPSocket {
             }
         }
     }
+    
+    /// Gets the current outgoing queue bytes count.
+    func getQueueBytesOut() -> Int {
+        return queueBytesOut
+    }
+    
+    @available(iOS 16.0, *)
+    func waitUntilOutgoingQueueFlushed(
+        timeout: Duration,
+        pollInterval: Duration = .milliseconds(50)
+    ) async throws {
+        let deadline = Date.now.advanced(by: timeout.timeInterval)
+
+        while queueBytesOut > 0 {
+            if Date.now >= deadline {
+                throw RTMPConnection.Error.requestTimedOut
+            }
+            try await Task.sleep(for: pollInterval)
+        }
+    }
+}
+
+@available(iOS 16.0, *)
+extension Duration {
+    var timeInterval: TimeInterval {
+        let seconds = Double(components.seconds)
+        let attoseconds = Double(components.attoseconds) / 1_000_000_000_000_000_000
+        return seconds + attoseconds
+    }
+
+    var nanosecondsValue: UInt64 {
+        let nanosFromSeconds = UInt64(components.seconds) * 1_000_000_000
+        let nanosFromAttoseconds = UInt64(components.attoseconds) / 1_000_000
+        return nanosFromSeconds + nanosFromAttoseconds
+    }
 }
 
 extension RTMPSocket: NetworkTransportReporter {

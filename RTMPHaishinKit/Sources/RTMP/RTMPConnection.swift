@@ -613,4 +613,17 @@ public actor RTMPConnection: HaishinKit.NetworkConnection {
             arguments: arguments
         )
     }
+    
+    /// Gets the current outgoing queue bytes count.
+    @available(iOS 16.0, *)
+    public func getOutgoingQueueBytes() async -> Int {
+        guard let socket else { return 0 }
+        return await socket.getQueueBytesOut()
+    }
+    
+    @available(iOS 16.0, *)
+    func waitUntilOutgoingQueueFlushed(timeout: Duration) async throws {
+        guard let socket else { return }
+        try await socket.waitUntilOutgoingQueueFlushed(timeout: timeout)
+    }
 }

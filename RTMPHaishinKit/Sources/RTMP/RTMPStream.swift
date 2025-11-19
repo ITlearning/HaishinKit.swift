@@ -188,6 +188,8 @@ public actor RTMPStream {
     @Published public private(set) var currentFPS: UInt16 = 0
     /// The ready state of stream.
     @Published public private(set) var readyState: StreamReadyState = .idle
+    /// Indicates whether the stream is in the process of closing.
+    @Published public private(set) var isClosing = false
     /// The stream of events you receive RTMP status events from a service.
     public var status: AsyncStream<RTMPStatus> {
         AsyncStream { continuation in
@@ -410,6 +412,108 @@ public actor RTMPStream {
         }
     }
 
+    /// Closes the stream with optional flush timeout and progress callback.
+    ///
+    /// - Parameters:
+    ///   - flushTimeout: Maximum time to wait for outgoing queue to flush. Default is 0 (no flush).
+    ///   - progressCallback: Optional callback for flush progress updates. Called with (progress: Double, remainingBytes: Int) where progress is 0.0-1.0.
+    /// - Returns: RTMPResponse from the server
+    /// - Throws: RTMPStream.Error if the operation fails
+    @available(iOS 16.0, *)
+    public func close(
+        flushTimeout: Duration = .seconds(0),
+        progressCallback: ((Double, Int) -> Void)? = nil
+    ) async throws -> RTMPResponse {
+        guard readyState == .playing || readyState == .publishing else {
+            throw Error.invalidState
+        }
+        
+        // Set closing flag to prevent new frame production
+        isClosing = true
+        defer {
+            isClosing = false
+        }
+        
+        // Stop frame production before flushing (step 2 in workflow)
+        outgoing.stopRunning()
+        
+        // Flush remaining data in queue with progress monitoring (step 3 in workflow)
+        if flushTimeout > .zero {
+            let initialBytes = await connection?.getOutgoingQueueBytes() ?? 0
+            
+            // Progress monitoring task
+            let progressTask = Task {
+                var previousBytes = initialBytes
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 50_000_000) // 50ms polling interval
+                    let currentBytes = await connection?.getOutgoingQueueBytes() ?? 0
+                    
+                    // Only update progress if bytes decreased
+                    if currentBytes < previousBytes && initialBytes > 0 {
+                        let progress = max(0.0, min(1.0, 1.0 - (Double(currentBytes) / Double(initialBytes))))
+                        progressCallback?(progress, currentBytes)
+                    }
+                    previousBytes = currentBytes
+                    
+                    // Exit if queue is empty
+                    if currentBytes == 0 {
+                        progressCallback?(1.0, 0)
+                        break
+                    }
+                }
+            }
+            
+            do {
+                try await connection?.waitUntilOutgoingQueueFlushed(timeout: flushTimeout)
+                progressTask.cancel()
+                // Ensure final callback
+                let finalBytes = await connection?.getOutgoingQueueBytes() ?? 0
+                if finalBytes == 0 {
+                    progressCallback?(1.0, 0)
+                }
+            } catch {
+                progressTask.cancel()
+                // On timeout, report final progress
+                let remainingBytes = await connection?.getOutgoingQueueBytes() ?? 0
+                let finalProgress = initialBytes > 0 
+                    ? max(0.0, min(1.0, 1.0 - (Double(remainingBytes) / Double(initialBytes))))
+                    : 1.0
+                progressCallback?(finalProgress, remainingBytes)
+                // Continue with teardown even on timeout
+            }
+        }
+        
+        // Teardown: close stream and connection (step 4 in workflow)
+        return try await withCheckedThrowingContinuation { continutation in
+            self.continuation = continutation
+            switch readyState {
+            case .playing:
+                expectedResponse = Code.playStop
+            case .publishing:
+                expectedResponse = Code.unpublishSuccess
+            default:
+                break
+            }
+            Task {
+                await incoming.stopRunning()
+                try? await Task.sleep(nanoseconds: requestTimeout * 1_000_000)
+                self.continuation.map {
+                    $0.resume(throwing: Error.requestTimedOut)
+                }
+                self.continuation = nil
+            }
+            doOutput(.zero, chunkStreamId: .command, message: RTMPCommandMessage(
+                streamId: id,
+                transactionId: 0,
+                objectEncoding: objectEncoding,
+                commandName: "closeStream",
+                commandObject: nil,
+                arguments: []
+            ))
+            readyState = .idle
+        }
+    }
+    
     /// Stops playing or publishing and makes available other uses.
     public func close() async throws -> RTMPResponse {
         guard readyState == .playing || readyState == .publishing else {
@@ -722,6 +826,11 @@ extension RTMPStream: _Stream {
     }
 
     public func append(_ sampleBuffer: CMSampleBuffer) {
+        // Ignore new frames if closing
+        guard !isClosing else {
+            return
+        }
+        
         switch sampleBuffer.formatDescription?.mediaType {
         case .video:
             if sampleBuffer.formatDescription?.isCompressed == true {
@@ -762,6 +871,11 @@ extension RTMPStream: _Stream {
     }
 
     public func append(_ audioBuffer: AVAudioBuffer, when: AVAudioTime) {
+        // Ignore new audio if closing
+        guard !isClosing else {
+            return
+        }
+        
         switch audioBuffer {
         case let audioBuffer as AVAudioCompressedBuffer:
             do {
