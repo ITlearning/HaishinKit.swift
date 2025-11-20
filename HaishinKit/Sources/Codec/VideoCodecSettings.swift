@@ -120,8 +120,8 @@ public struct VideoCodecSettings: Codable, Sendable {
     public var isHardwareAcceleratedEnabled: Bool
     /// Specifies the video frame interval.
     public var frameInterval: Double = 0.0
-    /// Specifies the expected frame rate for video encoding.
-    public var expectedFrameRate: Float64
+    /// Specifies the default frame rate for video encoding.
+    public var defaultFrameRate: Float64
     
     package var format: Format = .h264
 
@@ -139,7 +139,7 @@ public struct VideoCodecSettings: Codable, Sendable {
         dataRateLimits: [Double]? = [0.0, 0.0],
         isLowLatencyRateControlEnabled: Bool = false,
         isHardwareAcceleratedEnabled: Bool = true,
-        expectedFrameRate: Float64 = MediaMixer.defaultFrameRate
+        defaultFrameRate: Float64 = 30
     ) {
         self.videoSize = videoSize
         self.bitRate = bitRate
@@ -151,7 +151,7 @@ public struct VideoCodecSettings: Codable, Sendable {
         self.dataRateLimits = dataRateLimits
         self.isLowLatencyRateControlEnabled = isLowLatencyRateControlEnabled
         self.isHardwareAcceleratedEnabled = isHardwareAcceleratedEnabled
-        self.expectedFrameRate = expectedFrameRate
+        self.defaultFrameRate = defaultFrameRate
         if profileLevel.contains("HEVC") {
             self.format = .hevc
         }
@@ -167,7 +167,7 @@ public struct VideoCodecSettings: Codable, Sendable {
                     dataRateLimits == rhs.dataRateLimits &&
                     isLowLatencyRateControlEnabled == rhs.isLowLatencyRateControlEnabled &&
                     isHardwareAcceleratedEnabled == rhs.isHardwareAcceleratedEnabled &&
-                    expectedFrameRate == rhs.expectedFrameRate
+                    defaultFrameRate == rhs.defaultFrameRate
         )
     }
 
@@ -190,7 +190,7 @@ public struct VideoCodecSettings: Codable, Sendable {
             .init(key: .profileLevel, value: profileLevel as NSObject),
             .init(key: bitRateMode.key, value: NSNumber(value: bitRate)),
             // It seemes that VT supports the range 0 to 30.
-            .init(key: .expectedFrameRate, value: NSNumber(value: (expectedFrameRate <= 30) ? expectedFrameRate : 0)),
+            .init(key: .expectedFrameRate, value: NSNumber(value: (defaultFrameRate <= 30) ? defaultFrameRate : 0)),
             .init(key: .maxKeyFrameIntervalDuration, value: NSNumber(value: maxKeyFrameIntervalDuration)),
             .init(key: .allowFrameReordering, value: (allowFrameReordering ?? !isBaseline) as NSObject),
             .init(key: .pixelTransferProperties, value: [

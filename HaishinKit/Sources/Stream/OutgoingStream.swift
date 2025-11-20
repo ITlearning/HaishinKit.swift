@@ -56,11 +56,6 @@ package final class OutgoingStream {
 
     /// The video input format.
     package private(set) var videoInputFormat: CMFormatDescription?
-    
-    /// The expected frame rate for video encoding.
-    package var expectedFrameRate: Float64 {
-        videoSettings.expectedFrameRate
-    }
 
     private var audioCodec = AudioCodec()
     private var videoCodec = VideoCodec()
