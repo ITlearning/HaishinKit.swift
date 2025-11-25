@@ -1,10 +1,8 @@
-import AVFAudio
-import CoreMedia
 import Foundation
 import HaishinKit
 import libdatachannel
 
-public actor MediaStreamTrack {
+struct RTCTrackConfiguration: Sendable {
     private static func generateSSRC() -> UInt32 {
         var ssrc: UInt32 = 0
         repeat {
@@ -25,9 +23,9 @@ public actor MediaStreamTrack {
     let msid: String
     let trackId: String
     let profile: String?
-    let id: String = UUID().uuidString
-    private var track: RTCTrack?
+}
 
+extension RTCTrackConfiguration {
     init(mid: String, streamId: String, audioCodecSettings: AudioCodecSettings) {
         self.codec = audioCodecSettings.format.cValue ?? RTC_CODEC_OPUS
         self.ssrc = Self.generateSSRC()
@@ -35,7 +33,7 @@ public actor MediaStreamTrack {
         self.mid = mid
         self.name = Self.generateCName()
         self.msid = streamId
-        self.trackId = id
+        self.trackId = UUID().uuidString
         self.profile = "minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1"
     }
 
@@ -46,22 +44,16 @@ public actor MediaStreamTrack {
         self.mid = mid
         self.name = Self.generateCName()
         self.msid = streamId
-        self.trackId = id
+        self.trackId = UUID().uuidString
         self.profile = nil
     }
+}
 
-    func send(_ buffer: CMSampleBuffer) {
-        track?.send(buffer)
-    }
-
-    func send(_ buffer: AVAudioCompressedBuffer, when: AVAudioTime) {
-        track?.send(buffer, when: when)
-    }
-
-    func addTrack(_ connection: Int32, direction: RTCDirection) throws {
+extension RTCTrackConfiguration {
+    func addTrack(_ connection: Int32, direction: RTCDirection) throws -> Int32 {
         var rtcTrackInit = makeRtcTrackInit(direction)
         let result = try RTCError.check(rtcAddTrackEx(connection, &rtcTrackInit))
-        track = RTCTrack(id: result)
+        return result
     }
 
     private func makeRtcTrackInit(_ direction: RTCDirection) -> rtcTrackInit {

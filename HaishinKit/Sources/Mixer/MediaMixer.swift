@@ -279,6 +279,7 @@ public final actor MediaMixer {
                 displayLink.preferredFramesPerSecond = Int(frameRate)
             }
         }
+        self.frameRate = frameRate
     }
 
     /// Sets the dynamic range mode.

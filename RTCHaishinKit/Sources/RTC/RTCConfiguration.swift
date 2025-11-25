@@ -62,6 +62,8 @@ extension RTCConfigurationConvertible {
 }
 
 public struct RTCConfiguration: RTCConfigurationConvertible {
+    static let empty = RTCConfiguration()
+
     public let iceServers: [String]
     public let bindAddress: String?
     public let certificateType: RTCCertificateType?

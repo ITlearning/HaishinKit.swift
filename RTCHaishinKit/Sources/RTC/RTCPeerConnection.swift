@@ -5,6 +5,7 @@ public protocol RTCPeerConnectionDelegate: AnyObject {
     func peerConnection(_ peerConnection: RTCPeerConnection, connectionStateChanged connectionState: RTCPeerConnection.ConnectionState)
     func peerConnection(_ peerConnection: RTCPeerConnection, iceGatheringStateChanged iceGatheringState: RTCPeerConnection.IceGatheringState)
     func peerConnection(_ peerConnection: RTCPeerConnection, iceConnectionStateChanged iceConnectionState: RTCPeerConnection.IceConnectionState)
+    func peerConnection(_ peerConnection: RTCPeerConnection, signalingStateChanged signalingState: RTCPeerConnection.SignalingState)
     func peerConnection(_ peerConneciton: RTCPeerConnection, didOpen dataChannel: RTCDataChannel)
     func peerConnection(_ peerConnection: RTCPeerConnection, gotIceCandidate candidated: RTCIceCandidate)
 }
@@ -26,20 +27,46 @@ public final class RTCPeerConnection {
         case closed
     }
 
+    /// Represents the ICE gathering state of an RTCPeerConnection.
     public enum IceGatheringState: Sendable {
+        /// ICE gathering has not yet started.
         case new
+        /// The agent is currently gathering ICE candidates.
         case inProgress
+        /// ICE gathering has finished. No more candidates will be gathered.
         case complete
     }
 
+    /// Represents the state of the ICE connection for an RTCPeerConnection.
     public enum IceConnectionState: Sendable {
+        /// The ICE agent is newly created and no checks have started yet.
         case new
+        /// The ICE agent is checking candidate pairs to find a workable connection.
         case checking
+        /// A usable ICE connection has been established.
         case connected
+        /// ICE checks have completed successfully, and the connection is fully stable.
         case completed
+        /// The ICE connection has failed and cannot recover.
         case failed
+        /// The ICE connection has been lost or interrupted.
         case disconnected
+        /// The ICE agent has been closed and will not be used again.
         case closed
+    }
+
+    /// Represents the signaling state of an RTCPeerConnection.
+    public enum SignalingState: Sendable {
+        /// The signaling state is stable; there is no outstanding local or remote offer.
+        case stable
+        /// A local offer has been created and set as the local description.
+        case haveLocalOffer
+        /// A remote offer has been received and set as the remote description.
+        case haveRemoteOffer
+        /// A provisional (pr-answer) has been set as the local description.
+        case haveLocalPRAnswer
+        /// A provisional (pr-answer) has been set as the remote description.
+        case haveRemotePRAnswer
     }
 
     static let audioMediaDescription = """
@@ -63,75 +90,109 @@ a=fmtp:98 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f
 
     static let bufferSize: Int = 1024 * 16
 
+    /// Specifies the delegate of an RTCPeerConnection.
     public weak var delegate: (any RTCPeerConnectionDelegate)?
+    /// The current state of connection.
     public private(set) var connectionState: ConnectionState = .new {
         didSet {
+            guard connectionState != oldValue else {
+                return
+            }
             delegate?.peerConnection(self, connectionStateChanged: connectionState)
         }
     }
+    /// The current state of ice connection.
     public private(set) var iceConnectionState: IceConnectionState = .new {
         didSet {
+            guard iceConnectionState != oldValue else {
+                return
+            }
             delegate?.peerConnection(self, iceConnectionStateChanged: iceConnectionState)
         }
     }
-    private let connection: Int32
-    private(set) var tracks: [RTCTrack] = []
-    private(set) var candidates: [RTCIceCandidate] = []
-    private(set) var signalingState: RTCSignalingState = .stable
-    private(set) var iceGatheringState: IceGatheringState = .new {
+    /// The current state of ice gathering.
+    public private(set) var iceGatheringState: IceGatheringState = .new {
         didSet {
+            guard iceGatheringState != oldValue else {
+                return
+            }
             delegate?.peerConnection(self, iceGatheringStateChanged: iceGatheringState)
         }
     }
+    /// The current state of signaling.
+    public private(set) var signalingState: SignalingState = .stable {
+        didSet {
+            guard signalingState != oldValue else {
+                return
+            }
+            delegate?.peerConnection(self, signalingStateChanged: signalingState)
+        }
+    }
+    private let connection: Int32
     private(set) var localDescription: String = ""
 
-    public init(_ config: some RTCConfigurationConvertible) {
-        connection = config.createPeerConnection()
-        rtcSetUserPointer(connection, Unmanaged.passUnretained(self).toOpaque())
-        rtcSetLocalDescriptionCallback(connection) { _, sdp, _, pointer in
-            guard let pointer else { return }
-            if let sdp {
-                Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().localDescription = String(cString: sdp)
-            }
+    /// Creates a peerConnection instance.
+    public init(_ config: (some RTCConfigurationConvertible)? = nil) throws {
+        if let config {
+            connection = config.createPeerConnection()
+        } else {
+            connection = RTCConfiguration.empty.createPeerConnection()
         }
-        rtcSetLocalCandidateCallback(connection) { _, candidate, mid, pointer in
-            guard let pointer else { return }
-            Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().didGenerateCandidate(.init(
-                candidate: candidate,
-                mid: mid
-            ))
-        }
-        rtcSetStateChangeCallback(connection) { _, state, pointer in
-            guard let pointer else { return }
-            if let state = ConnectionState(cValue: state) {
-                Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().connectionState = state
-            }
-        }
-        rtcSetIceStateChangeCallback(connection) { _, state, pointer in
-            guard let pointer else { return }
-            if let state = IceConnectionState(cValue: state) {
-                Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().iceConnectionState = state
-            }
-        }
-        rtcSetGatheringStateChangeCallback(connection) { _, gatheringState, pointer in
-            guard let pointer else { return }
-            if let gatheringState = IceGatheringState(cValue: gatheringState) {
-                Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().iceGatheringState = gatheringState
-            }
-        }
-        rtcSetSignalingStateChangeCallback(connection) { _, signalingState, pointer in
-            guard let pointer else { return }
-            if let signalingState = RTCSignalingState(cValue: signalingState) {
-                Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().signalingState = signalingState
-            }
-        }
-        rtcSetTrackCallback(connection) { _, track, pointer in
-            guard let pointer else { return }
-            Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().didReceiveTrack(.init(id: track))
-        }
-        rtcSetDataChannelCallback(connection) { _, dataChannel, pointer in
-            guard let pointer else { return }
-            Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().didReceiveDataChannel(.init(id: dataChannel))
+        try RTCError.check(connection)
+        do {
+            try RTCError.check(rtcSetLocalDescriptionCallback(connection) { _, sdp, _, pointer in
+                guard let pointer else { return }
+                if let sdp {
+                    Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().localDescription = String(cString: sdp)
+                }
+            })
+            try RTCError.check(rtcSetLocalCandidateCallback(connection) { _, candidate, mid, pointer in
+                guard let pointer else { return }
+                Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().didGenerateCandidate(.init(
+                    candidate: candidate,
+                    mid: mid
+                ))
+            })
+            try RTCError.check(rtcSetStateChangeCallback(connection) { _, state, pointer in
+                guard let pointer else { return }
+                if let state = ConnectionState(cValue: state) {
+                    Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().connectionState = state
+                }
+            })
+            try RTCError.check(rtcSetIceStateChangeCallback(connection) { _, state, pointer in
+                guard let pointer else { return }
+                if let state = IceConnectionState(cValue: state) {
+                    Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().iceConnectionState = state
+                }
+            })
+            try RTCError.check(rtcSetGatheringStateChangeCallback(connection) { _, gatheringState, pointer in
+                guard let pointer else { return }
+                if let gatheringState = IceGatheringState(cValue: gatheringState) {
+                    Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().iceGatheringState = gatheringState
+                }
+            })
+            try RTCError.check(rtcSetSignalingStateChangeCallback(connection) { _, signalingState, pointer in
+                guard let pointer else { return }
+                if let signalingState = SignalingState(cValue: signalingState) {
+                    Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().signalingState = signalingState
+                }
+            })
+            try RTCError.check(rtcSetTrackCallback(connection) { _, track, pointer in
+                guard let pointer else { return }
+                if let track = try? RTCTrack(id: track) {
+                    Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().didOpenTrack(track)
+                }
+            })
+            try RTCError.check(rtcSetDataChannelCallback(connection) { _, dataChannel, pointer in
+                guard let pointer else { return }
+                if let channel = try? RTCDataChannel(id: dataChannel) {
+                    Unmanaged<RTCPeerConnection>.fromOpaque(pointer).takeUnretainedValue().didOpenDataChannel(channel)
+                }
+            })
+            rtcSetUserPointer(connection, Unmanaged.passUnretained(self).toOpaque())
+        } catch {
+            rtcDeletePeerConnection(connection)
+            throw error
         }
     }
 
@@ -140,15 +201,33 @@ a=fmtp:98 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f
         rtcDeletePeerConnection(connection)
     }
 
-    public func addTrack(_ track: MediaStreamTrack) {
-        let connection = self.connection
-        Task {
-            try await track.addTrack(connection, direction: .sendrecv)
+    /// Adds a `MediaStreamTrack` to the peer connection and associates it with the given `MediaStream`.
+    ///
+    /// - Parameters:
+    ///   - track: The media track to add (audio or video).
+    ///   - stream: The `MediaStream` that the track belongs to.
+    public func addTrack(_ track: some RTCStreamTrack, stream: RTCStream) throws {
+        let msid = stream.id
+        switch track {
+        case let track as AudioStreamTrack:
+            let config = RTCTrackConfiguration(mid: "0", streamId: msid, audioCodecSettings: track.settings)
+            let id = try config.addTrack(connection, direction: .sendrecv)
+            Task {
+                await stream.addTrack(try RTCSendableStreamTrack(id, id: track.id))
+            }
+        case let track as VideoStreamTrack:
+            let config = RTCTrackConfiguration(mid: "1", streamId: msid, videoCodecSettings: track.settings)
+            let id = try config.addTrack(connection, direction: .sendrecv)
+            Task {
+                await stream.addTrack(try RTCSendableStreamTrack(id, id: track.id))
+            }
+        default:
+            break
         }
     }
 
     @discardableResult
-    func addTrack(_ kind: MediaStreamKind, stream: MediaStream) throws -> RTCTrack {
+    func addTrack(_ kind: RTCStreamKind, stream: RTCStream) throws -> RTCTrack {
         let sdp: String
         switch kind {
         case .audio:
@@ -159,9 +238,8 @@ a=fmtp:98 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f
         let result = try RTCError.check(sdp.withCString { cString in
             rtcAddTrack(connection, cString)
         })
-        let track = RTCTrack(id: result)
+        let track = try RTCTrack(id: result)
         track.delegate = stream
-        tracks.append(track)
         return track
     }
 
@@ -195,7 +273,7 @@ a=fmtp:98 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f
         let result = try RTCError.check([label].withCStrings { cStrings in
             rtcCreateDataChannel(connection, cStrings[0])
         })
-        return RTCDataChannel(id: result)
+        return try RTCDataChannel(id: result)
     }
 
     public func close() {
@@ -207,15 +285,14 @@ a=fmtp:98 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f
     }
 
     private func didGenerateCandidate(_ candidated: RTCIceCandidate) {
-        candidates.append(candidated)
         delegate?.peerConnection(self, gotIceCandidate: candidated)
     }
 
-    private func didReceiveTrack(_ track: RTCTrack) {
+    private func didOpenTrack(_ track: RTCTrack) {
         logger.info(track)
     }
 
-    private func didReceiveDataChannel(_ dataChannel: RTCDataChannel) {
+    private func didOpenDataChannel(_ dataChannel: RTCDataChannel) {
         delegate?.peerConnection(self, didOpen: dataChannel)
     }
 }
@@ -273,6 +350,25 @@ extension RTCPeerConnection.IceConnectionState {
             self = .disconnected
         case RTC_ICE_CLOSED:
             self = .closed
+        default:
+            return nil
+        }
+    }
+}
+
+extension RTCPeerConnection.SignalingState {
+    init?(cValue: rtcSignalingState) {
+        switch cValue {
+        case RTC_SIGNALING_STABLE:
+            self = .stable
+        case RTC_SIGNALING_HAVE_LOCAL_OFFER:
+            self = .haveLocalOffer
+        case RTC_SIGNALING_HAVE_REMOTE_OFFER:
+            self = .haveRemoteOffer
+        case RTC_SIGNALING_HAVE_LOCAL_PRANSWER:
+            self = .haveLocalPRAnswer
+        case RTC_SIGNALING_HAVE_REMOTE_PRANSWER:
+            self = .haveRemotePRAnswer
         default:
             return nil
         }

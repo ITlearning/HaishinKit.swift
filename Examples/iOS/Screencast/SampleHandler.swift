@@ -2,13 +2,13 @@ import HaishinKit
 @preconcurrency import Logboard
 import MediaPlayer
 import ReplayKit
+import RTCHaishinKit
 import RTMPHaishinKit
 import SRTHaishinKit
 import VideoToolbox
 
 nonisolated let logger = LBLogger.with("com.haishinkit.Screencast")
 
-@available(iOS 10.0, *)
 final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var slider: UISlider?
     private var session: Session?
@@ -19,18 +19,18 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         Task {
             await SessionBuilderFactory.shared.register(RTMPSessionFactory())
             await SessionBuilderFactory.shared.register(SRTSessionFactory())
+            await SessionBuilderFactory.shared.register(HTTPSessionFactory())
+
+            await SRTLogger.shared.setLevel(.debug)
+            await RTCLogger.shared.setLevel(.info)
         }
     }
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
-        /*
-         let socket = SocketAppender()
-         socket.connect("192.168.1.9", port: 22222)
-         logger.level = .debug
-         logger.appender = socket
-         logger.level = .debug
-         */
-        LBLogger.with(kHaishinKitIdentifier).level = .info
+        LBLogger.with(kHaishinKitIdentifier).level = .trace
+        LBLogger.with(kRTMPHaishinKitIdentifier).level = .trace
+        LBLogger.with(kSRTHaishinKitIdentifier).level = .trace
+        LBLogger.with(kRTCHaishinKitIdentifier).level = .trace
         // mixer.audioMixerSettings.tracks[1] = .default
         Task {
             do {

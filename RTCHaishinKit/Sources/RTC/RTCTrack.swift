@@ -75,27 +75,33 @@ class RTCTrack: RTCChannel {
 
     private var packetizer: (any RTPPacketizer)?
 
-    init(id: Int32) {
+    init(id: Int32) throws {
         self.id = id
-        rtcSetUserPointer(id, Unmanaged.passUnretained(self).toOpaque())
-        rtcSetOpenCallback(id) { _, pointer in
-            guard let pointer else { return }
-            Unmanaged<RTCTrack>.fromOpaque(pointer).takeUnretainedValue().readyState = .open
-        }
-        rtcSetClosedCallback(id) { _, pointer in
-            guard let pointer else { return }
-            Unmanaged<RTCTrack>.fromOpaque(pointer).takeUnretainedValue().readyState = .closed
-        }
-        rtcSetMessageCallback(id) { _, bytes, size, pointer in
-            guard let bytes, let pointer else { return }
-            if 0 <= size {
-                let data = Data(bytes: bytes, count: Int(size))
-                Unmanaged<RTCTrack>.fromOpaque(pointer).takeUnretainedValue().didReceiveMessage(data)
-            }
-        }
-        rtcSetErrorCallback(id) { _, error, pointer in
-            guard let error, let pointer else { return }
-            Unmanaged<RTCTrack>.fromOpaque(pointer).takeUnretainedValue().errorOccurred(String(cString: error))
+        try RTCError.check(id)
+        do {
+            rtcSetUserPointer(id, Unmanaged.passUnretained(self).toOpaque())
+            try RTCError.check(rtcSetOpenCallback(id) { _, pointer in
+                guard let pointer else { return }
+                Unmanaged<RTCTrack>.fromOpaque(pointer).takeUnretainedValue().readyState = .open
+            })
+            try RTCError.check(rtcSetClosedCallback(id) { _, pointer in
+                guard let pointer else { return }
+                Unmanaged<RTCTrack>.fromOpaque(pointer).takeUnretainedValue().readyState = .closed
+            })
+            try RTCError.check(rtcSetMessageCallback(id) { _, bytes, size, pointer in
+                guard let bytes, let pointer else { return }
+                if 0 <= size {
+                    let data = Data(bytes: bytes, count: Int(size))
+                    Unmanaged<RTCTrack>.fromOpaque(pointer).takeUnretainedValue().didReceiveMessage(data)
+                }
+            })
+            try RTCError.check(rtcSetErrorCallback(id) { _, error, pointer in
+                guard let error, let pointer else { return }
+                Unmanaged<RTCTrack>.fromOpaque(pointer).takeUnretainedValue().errorOccurred(String(cString: error))
+            })
+        } catch {
+            rtcDeleteTrack(id)
+            throw error
         }
     }
 

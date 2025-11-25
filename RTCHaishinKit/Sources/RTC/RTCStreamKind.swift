@@ -1,4 +1,4 @@
-public enum MediaStreamKind {
+public enum RTCStreamKind {
     case audio
     case video
 }

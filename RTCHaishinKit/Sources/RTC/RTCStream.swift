@@ -2,7 +2,7 @@ import AVFoundation
 import HaishinKit
 import libdatachannel
 
-public actor MediaStream {
+public actor RTCStream {
     enum Error: Swift.Error {
         case unsupportedCodec
     }
@@ -11,14 +11,8 @@ public actor MediaStream {
     static let supportedVideoCodecs: [VideoCodecSettings.Format] = [.h264]
 
     let id: String = UUID().uuidString
-    private var _tracks: [MediaStreamTrack] = []
-    public var tracks: [MediaStreamTrack] {
-        if _tracks.isEmpty {
-            _tracks.append(.init(mid: "1", streamId: id, audioCodecSettings: outgoing.audioSettings))
-            // _tracks.append(.init(mid: "0", streamId: id, videoCodecSettings: outgoing.videoSettings))
-        }
-        return _tracks
-    }
+    private(set) var tracks: [RTCSendableStreamTrack] = []
+    public private(set) var readyState: StreamReadyState = .idle
     public private(set) var videoTrackId: UInt8? = UInt8.max
     public private(set) var audioTrackId: UInt8? = UInt8.max
     package lazy var incoming = IncomingStream(self)
@@ -28,7 +22,6 @@ public actor MediaStream {
         return stream
     }()
     package var outputs: [any StreamOutput] = []
-    public var readyState: StreamReadyState = .idle
     package var bitRateStrategy: (any StreamBitRateStrategy)?
     private var direction: RTCDirection = .sendonly
 
@@ -65,7 +58,7 @@ public actor MediaStream {
     }
 
     public func close() async {
-        _tracks.removeAll()
+        tracks.removeAll()
         switch direction {
         case .sendonly:
             outgoing.stopRunning()
@@ -77,9 +70,14 @@ public actor MediaStream {
             break
         }
     }
+
+    func addTrack(_ track: RTCSendableStreamTrack) async {
+        await track.setDelegate(self)
+        tracks.append(track)
+    }
 }
 
-extension MediaStream: _Stream {
+extension RTCStream: _Stream {
     public func setAudioSettings(_ audioSettings: AudioCodecSettings) throws {
         guard Self.supportedAudioCodecs.contains(audioSettings.format) else {
             throw Error.unsupportedCodec
@@ -99,7 +97,7 @@ extension MediaStream: _Stream {
         case .video:
             if sampleBuffer.formatDescription?.isCompressed == true {
                 Task {
-                    for track in _tracks {
+                    for track in tracks {
                         await track.send(sampleBuffer)
                     }
                 }
@@ -125,7 +123,7 @@ extension MediaStream: _Stream {
             outputs.forEach { $0.stream(self, didOutput: audioBuffer, when: when) }
         case let audioBuffer as AVAudioCompressedBuffer:
             Task {
-                for track in _tracks {
+                for track in tracks {
                     await track.send(audioBuffer, when: when)
                 }
             }
@@ -139,7 +137,7 @@ extension MediaStream: _Stream {
     }
 }
 
-extension MediaStream: RTCTrackDelegate {
+extension RTCStream: RTCTrackDelegate {
     // MARK: RTCTrackDelegate
     nonisolated func track(_ track: RTCTrack, readyStateChanged readyState: RTCTrack.ReadyState) {
     }
@@ -157,7 +155,7 @@ extension MediaStream: RTCTrackDelegate {
     }
 }
 
-extension MediaStream: MediaMixerOutput {
+extension RTCStream: MediaMixerOutput {
     // MARK: MediaMixerOutput
     public func selectTrack(_ id: UInt8?, mediaType: CMFormatDescription.MediaType) {
         switch mediaType {

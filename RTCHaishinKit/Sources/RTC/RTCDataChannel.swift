@@ -62,29 +62,35 @@ public final class RTCDataChannel: RTCChannel {
 
     let id: Int32
 
-    init(id: Int32) {
+    init(id: Int32) throws {
         self.id = id
-        rtcSetUserPointer(id, Unmanaged.passUnretained(self).toOpaque())
-        rtcSetOpenCallback(id) { _, pointer in
-            guard let pointer else { return }
-            Unmanaged<RTCDataChannel>.fromOpaque(pointer).takeUnretainedValue().readyState = .open
-        }
-        rtcSetClosedCallback(id) { _, pointer in
-            guard let pointer else { return }
-            Unmanaged<RTCDataChannel>.fromOpaque(pointer).takeUnretainedValue().readyState = .connecting
-        }
-        rtcSetMessageCallback(id) { _, bytes, size, pointer in
-            guard let bytes, let pointer else { return }
-            if 0 <= size {
-                let data = Data(bytes: bytes, count: Int(size))
-                Unmanaged<RTCDataChannel>.fromOpaque(pointer).takeUnretainedValue().didReceiveMessage(data)
-            } else {
-                Unmanaged<RTCDataChannel>.fromOpaque(pointer).takeUnretainedValue().didReceiveMessage(String(cString: bytes))
-            }
-        }
-        rtcSetErrorCallback(id) { _, error, pointer in
-            guard let error, let pointer else { return }
-            Unmanaged<RTCDataChannel>.fromOpaque(pointer).takeUnretainedValue().errorOccurred(String(cString: error))
+        try RTCError.check(id)
+        do {
+            try RTCError.check(rtcSetOpenCallback(id) { _, pointer in
+                guard let pointer else { return }
+                Unmanaged<RTCDataChannel>.fromOpaque(pointer).takeUnretainedValue().readyState = .open
+            })
+            try RTCError.check(rtcSetClosedCallback(id) { _, pointer in
+                guard let pointer else { return }
+                Unmanaged<RTCDataChannel>.fromOpaque(pointer).takeUnretainedValue().readyState = .connecting
+            })
+            try RTCError.check(rtcSetMessageCallback(id) { _, bytes, size, pointer in
+                guard let bytes, let pointer else { return }
+                if 0 <= size {
+                    let data = Data(bytes: bytes, count: Int(size))
+                    Unmanaged<RTCDataChannel>.fromOpaque(pointer).takeUnretainedValue().didReceiveMessage(data)
+                } else {
+                    Unmanaged<RTCDataChannel>.fromOpaque(pointer).takeUnretainedValue().didReceiveMessage(String(cString: bytes))
+                }
+            })
+            try RTCError.check(rtcSetErrorCallback(id) { _, error, pointer in
+                guard let error, let pointer else { return }
+                Unmanaged<RTCDataChannel>.fromOpaque(pointer).takeUnretainedValue().errorOccurred(String(cString: error))
+            })
+            rtcSetUserPointer(id, Unmanaged.passUnretained(self).toOpaque())
+        } catch {
+            rtcDeleteDataChannel(id)
+            throw error
         }
     }
 
