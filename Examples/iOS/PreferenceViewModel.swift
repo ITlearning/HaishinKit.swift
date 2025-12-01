@@ -24,7 +24,6 @@ final class PreferenceViewModel: ObservableObject {
     // MARK: - VideoCodecSettings.
     @Published var bitRateMode: VideoCodecSettings.BitRateMode = .average
     var isLowLatencyRateControlEnabled: Bool = false
-    var defaultFrameRate: Float64 = 30
 
     // MARK: - Others
     @Published var viewType: ViewType = .metal
@@ -43,7 +42,6 @@ final class PreferenceViewModel: ObservableObject {
         var newSettings = settings
         newSettings.bitRateMode = bitRateMode
         newSettings.isLowLatencyRateControlEnabled = isLowLatencyRateControlEnabled
-        newSettings.defaultFrameRate = defaultFrameRate
         return newSettings
     }
 

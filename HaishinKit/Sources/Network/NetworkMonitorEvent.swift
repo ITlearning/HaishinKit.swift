@@ -6,6 +6,8 @@ public enum NetworkMonitorEvent: Sendable {
     case status(report: NetworkMonitorReport)
     /// To publish sufficient bandwidth occured.
     case publishInsufficientBWOccured(report: NetworkMonitorReport)
+    /// Buffer delay exceeded threshold.
+    case bufferDelayExceeded(report: NetworkMonitorReport, estimatedDelay: TimeInterval)
     /// To reset  statistics.
     case reset
 }

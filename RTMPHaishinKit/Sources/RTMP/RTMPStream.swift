@@ -785,6 +785,18 @@ extension RTMPStream: _Stream {
     }
 
     public func dispatch(_ event: NetworkMonitorEvent) async {
+        // Handle buffer delay exceeded before bitrate strategy
+        if case .bufferDelayExceeded(let report, let estimatedDelay) = event {
+            logger.warn("Buffer delay exceeded: \(estimatedDelay)s (queue: \(report.currentQueueBytesOut) bytes)")
+            if let socket = await connection?.getSocket() {
+                await socket.startSkipping {
+                    Task {
+                        logger.info("Buffer flush completed, resuming normal operation")
+                    }
+                }
+            }
+        }
+        
         await bitRateStrategy?.adjustBitrate(event, stream: self)
         currentFPS = frameCount
         frameCount = 0

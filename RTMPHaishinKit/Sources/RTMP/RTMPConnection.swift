@@ -196,6 +196,11 @@ public actor RTMPConnection: HaishinKit.NetworkConnection {
     }
 
     private var socket: RTMPSocket?
+    
+    /// Returns the current socket for buffer control operations.
+    func getSocket() -> RTMPSocket? {
+        return socket
+    }
     private var chunks: [UInt16: RTMPChunkMessageHeader] = [:]
     private var streams: [RTMPStream] = []
     private var sequence: Int64 = 0
@@ -504,6 +509,9 @@ public actor RTMPConnection: HaishinKit.NetworkConnection {
                 doOutput(sequence == 0 ? .zero : .one, chunkStreamId: .control, message: RTMPAcknowledgementMessage(sequence: UInt32(report.totalBytesIn)))
                 sequence += 1
             }
+        case .bufferDelayExceeded:
+            // Buffer delay is handled at stream level
+            break
         case .reset:
             // noop
             break

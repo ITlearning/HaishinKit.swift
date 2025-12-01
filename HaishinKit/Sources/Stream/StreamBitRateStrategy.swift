@@ -63,6 +63,9 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
                 try? await stream.setVideoSettings(videoSettings)
                 zeroBytesOutPerSecondCounts += 1
             }
+        case .bufferDelayExceeded:
+            // Buffer delay exceeded - handled at protocol level
+            break
         case .reset:
             var videoSettings = await stream.videoSettings
             zeroBytesOutPerSecondCounts = 0

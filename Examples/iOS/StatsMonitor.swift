@@ -29,6 +29,9 @@ struct StatsMonitor: StreamBitRateStrategy {
             callback(Stats(report: report))
         case .publishInsufficientBWOccured(let report):
             callback(Stats(report: report))
+        case .bufferDelayExceeded(_,_):
+            // 단순 로그 수집용
+            break
         case .reset:
             break
         }

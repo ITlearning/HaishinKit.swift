@@ -27,6 +27,7 @@ package final actor NetworkMonitor {
     private var previousTotalBytesIn = 0
     private var previousTotalBytesOut = 0
     private var previousQueueBytesOut: [Int] = []
+    private var bufferDelayThreshold: TimeInterval
     private var continuation: AsyncStream<NetworkMonitorEvent>.Continuation? {
         didSet {
             oldValue?.finish()
@@ -35,8 +36,14 @@ package final actor NetworkMonitor {
     private weak var reporter: (any NetworkTransportReporter)?
 
     /// Creates a new instance.
-    package init(_ reporter: some NetworkTransportReporter) {
+    package init(_ reporter: some NetworkTransportReporter, bufferDelayThreshold: TimeInterval = 60.0) {
         self.reporter = reporter
+        self.bufferDelayThreshold = bufferDelayThreshold
+    }
+
+    /// Sets the buffer delay threshold for triggering buffer flush.
+    package func setBufferDelayThreshold(_ threshold: TimeInterval) {
+        self.bufferDelayThreshold = threshold
     }
 
     private func collect() async throws -> NetworkMonitorEvent {
@@ -58,6 +65,17 @@ package final actor NetworkMonitor {
             currentBytesInPerSecond: currentBytesInPerSecond,
             currentBytesOutPerSecond: currentBytesOutPerSecond
         )
+        // Calculate estimated delay based on queue size and output rate
+        let estimatedDelay: TimeInterval
+        if currentBytesOutPerSecond > 0 {
+            estimatedDelay = TimeInterval(queueBytesOut) / TimeInterval(currentBytesOutPerSecond)
+        } else {
+            estimatedDelay = 0
+        }
+        // Check if buffer delay exceeds threshold
+        if estimatedDelay > bufferDelayThreshold {
+            return .bufferDelayExceeded(report: eventReport, estimatedDelay: estimatedDelay)
+        }
         if measureInterval <= previousQueueBytesOut.count {
             defer {
                 previousQueueBytesOut.removeFirst()
