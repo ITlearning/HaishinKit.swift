@@ -796,7 +796,7 @@ extension RTMPStream: _Stream {
         // Handle buffer delay exceeded before bitrate strategy
         if case .bufferDelayExceeded(let report, let estimatedDelay) = event {
             logger.warn("Buffer delay exceeded: \(estimatedDelay)s (queue: \(report.currentQueueBytesOut) bytes)")
-            await connection?.startBufferSkipping()git a
+            await connection?.startBufferSkipping()
             outgoing.requestKeyFrame()
         }
         
