@@ -27,7 +27,7 @@ package final actor NetworkMonitor {
     private var previousTotalBytesIn = 0
     private var previousTotalBytesOut = 0
     private var previousQueueBytesOut: [Int] = []
-    private var bufferDelayThreshold: TimeInterval
+    package private(set) var bufferDelayThreshold: TimeInterval
     private var continuation: AsyncStream<NetworkMonitorEvent>.Continuation? {
         didSet {
             oldValue?.finish()

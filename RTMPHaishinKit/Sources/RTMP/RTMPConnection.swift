@@ -199,13 +199,20 @@ public actor RTMPConnection: HaishinKit.NetworkConnection {
     
     /// Starts buffer skipping mode to drain accumulated buffer.
     package func startBufferSkipping() async {
-        await socket?.startSkipping()
+        guard let rtmpSocket = socket else { return }
+        await rtmpSocket.startSkipping()
     }
     
     /// Sets the buffer delay threshold for automatic buffer flush.
     /// - Parameter threshold: The delay threshold in seconds.
     package func setBufferDelayThreshold(_ threshold: TimeInterval) async {
         await networkMonitor?.setBufferDelayThreshold(threshold)
+    }
+    
+    /// Gets the current buffer delay threshold.
+    /// - Returns: The delay threshold in seconds, or nil if not set.
+    package func getBufferDelayThreshold() async -> TimeInterval? {
+        return await networkMonitor?.bufferDelayThreshold
     }
     private var chunks: [UInt16: RTMPChunkMessageHeader] = [:]
     private var streams: [RTMPStream] = []

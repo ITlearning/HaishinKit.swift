@@ -88,8 +88,12 @@ final actor RTMPSocket {
         guard connected else {
             return
         }
-        // In skipping mode, discard data to drain buffer
+        // In skipping mode, only send key frames to minimize pixelation
         if isSkipping {
+            if isKeyFrame(data) {
+                queueBytesOut += data.count
+                outputs?.yield(data)
+            }
             return
         }
         queueBytesOut += data.count
@@ -101,8 +105,12 @@ final actor RTMPSocket {
             return
         }
         for data in iterator {
-            // In skipping mode, discard data to drain buffer
+            // In skipping mode, only send key frames to minimize pixelation
             if isSkipping {
+                if isKeyFrame(data) {
+                    queueBytesOut += data.count
+                    outputs?.yield(data)
+                }
                 continue
             }
             queueBytesOut += data.count
@@ -150,6 +158,15 @@ final actor RTMPSocket {
     func stopSkipping() {
         isSkipping = false
         logger.info("Stopped buffer skipping mode.")
+    }
+
+    /// Checks if the data contains a key frame (I-frame).
+    private func isKeyFrame(_ data: Data) -> Bool {
+        // RTMP video message: first byte contains frame type in upper 4 bits
+        // Frame type 1 = keyframe (I-frame)
+        guard data.count > 0 else { return false }
+        let frameType = (data[0] >> 4) & 0x0F
+        return frameType == 1  // RTMPFrameType.key.rawValue
     }
 
     private func stateDidChange(to state: NWConnection.State) {

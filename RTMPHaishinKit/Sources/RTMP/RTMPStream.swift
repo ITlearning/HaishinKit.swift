@@ -228,6 +228,7 @@ public actor RTMPStream {
     package lazy var incoming = IncomingStream(self)
     package lazy var outgoing = OutgoingStream()
     private weak var connection: RTMPConnection?
+    private var originalMaxKeyFrameIntervalDuration: Int32?
 
     private var audioFormat: AVAudioFormat? {
         didSet {
@@ -797,7 +798,38 @@ extension RTMPStream: _Stream {
         if case .bufferDelayExceeded(let report, let estimatedDelay) = event {
             logger.warn("Buffer delay exceeded: \(estimatedDelay)s (queue: \(report.currentQueueBytesOut) bytes)")
             await connection?.startBufferSkipping()
+            
+            // Calculate optimal I-frame interval based on delay and FPS
+            // Target: Send I-frame every (delay_threshold / 4) seconds
+            let delayThreshold = await connection?.getBufferDelayThreshold() ?? 60.0
+            let targetIntervalSeconds = delayThreshold / 4.0  // e.g., 60s → 15s, 15s → 3.75s
+            
+            var settings = outgoing.videoSettings
+            if originalMaxKeyFrameIntervalDuration == nil {
+                originalMaxKeyFrameIntervalDuration = settings.maxKeyFrameIntervalDuration
+            }
+            
+            // maxKeyFrameIntervalDuration is in seconds, min 1 second
+            let newDuration = max(Int32(targetIntervalSeconds), 1)
+            settings.maxKeyFrameIntervalDuration = newDuration
+            
+            let fps = settings.expectedFrameRate ?? 30
+            logger.info("Adjusted I-frame interval: \(originalMaxKeyFrameIntervalDuration ?? 0)s → \(newDuration)s (~\(Int(Double(fps) * Double(newDuration))) frames at \(fps)fps)")
+            
+            try? setVideoSettings(settings)
             outgoing.requestKeyFrame()
+            
+            // Restore original interval after delay recovery (10 seconds)
+            Task {
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                if let original = originalMaxKeyFrameIntervalDuration {
+                    var restoreSettings = outgoing.videoSettings
+                    restoreSettings.maxKeyFrameIntervalDuration = original
+                    try? setVideoSettings(restoreSettings)
+                    logger.info("Restored I-frame interval to \(original)s")
+                    originalMaxKeyFrameIntervalDuration = nil
+                }
+            }
         }
         
         await bitRateStrategy?.adjustBitrate(event, stream: self)
