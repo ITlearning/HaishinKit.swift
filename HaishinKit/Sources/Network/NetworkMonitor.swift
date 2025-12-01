@@ -27,6 +27,7 @@ package final actor NetworkMonitor {
     private var previousTotalBytesIn = 0
     private var previousTotalBytesOut = 0
     private var previousQueueBytesOut: [Int] = []
+    private var recentBytesOutPerSecond: [Int] = []  // Track recent throughput for averaging
     package private(set) var bufferDelayThreshold: TimeInterval
     private var continuation: AsyncStream<NetworkMonitorEvent>.Continuation? {
         didSet {
@@ -58,6 +59,13 @@ package final actor NetworkMonitor {
         previousTotalBytesIn = totalBytesIn
         previousTotalBytesOut = totalBytesOut
         previousQueueBytesOut.append(queueBytesOut)
+        
+        // Track recent throughput for calculating average
+        recentBytesOutPerSecond.append(currentBytesOutPerSecond)
+        if recentBytesOutPerSecond.count > 5 {  // Keep last 5 seconds
+            recentBytesOutPerSecond.removeFirst()
+        }
+        
         let eventReport = NetworkMonitorReport(
             totalBytesIn: totalBytesIn,
             totalBytesOut: totalBytesOut,
@@ -65,10 +73,16 @@ package final actor NetworkMonitor {
             currentBytesInPerSecond: currentBytesInPerSecond,
             currentBytesOutPerSecond: currentBytesOutPerSecond
         )
-        // Calculate estimated delay based on queue size and output rate
+        // Calculate estimated delay based on queue size and average output rate
+        // Use moving average of last 5 seconds to smooth out temporary fluctuations
         let estimatedDelay: TimeInterval
-        if currentBytesOutPerSecond > 0 {
-            estimatedDelay = TimeInterval(queueBytesOut) / TimeInterval(currentBytesOutPerSecond)
+        if !recentBytesOutPerSecond.isEmpty {
+            let avgBytesOutPerSecond = recentBytesOutPerSecond.reduce(0, +) / recentBytesOutPerSecond.count
+            if avgBytesOutPerSecond > 0 {
+                estimatedDelay = TimeInterval(queueBytesOut) / TimeInterval(avgBytesOutPerSecond)
+            } else {
+                estimatedDelay = 0
+            }
         } else {
             estimatedDelay = 0
         }
