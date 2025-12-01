@@ -723,6 +723,14 @@ extension RTMPStream: _Stream {
         outgoing.videoSettings = videoSettings
     }
 
+    /// Sets the buffer delay threshold for automatic buffer flush.
+    /// - Parameter threshold: The delay threshold in seconds. When estimated delay exceeds this value, buffer will be automatically flushed.
+    /// - Note: Default value is 60 seconds. Lower values provide better real-time performance but may cause more frequent buffer flushes.
+    public func setBufferDelayThreshold(_ threshold: TimeInterval) async {
+        guard let connection = connection else { return }
+        await connection.setBufferDelayThreshold(threshold)
+    }
+
     public func append(_ sampleBuffer: CMSampleBuffer) {
         switch sampleBuffer.formatDescription?.mediaType {
         case .video:
@@ -788,13 +796,7 @@ extension RTMPStream: _Stream {
         // Handle buffer delay exceeded before bitrate strategy
         if case .bufferDelayExceeded(let report, let estimatedDelay) = event {
             logger.warn("Buffer delay exceeded: \(estimatedDelay)s (queue: \(report.currentQueueBytesOut) bytes)")
-            if let socket = await connection?.getSocket() {
-                await socket.startSkipping {
-                    Task {
-                        logger.info("Buffer flush completed, resuming normal operation")
-                    }
-                }
-            }
+            await connection?.startBufferSkipping()
         }
         
         await bitRateStrategy?.adjustBitrate(event, stream: self)

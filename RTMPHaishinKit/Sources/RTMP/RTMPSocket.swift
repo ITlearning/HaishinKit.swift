@@ -20,7 +20,6 @@ final actor RTMPSocket {
     private var queueBytesOut = 0
     private var totalBytesOut = 0
     private var isSkipping = false
-    private var skipCompletionHandler: (() -> Void)?
     private var parameters: NWParameters = .tcp
     private var connection: NWConnection? {
         didSet {
@@ -134,17 +133,14 @@ final actor RTMPSocket {
     }
 
     /// Starts skipping mode to quickly drain the buffer.
-    /// - Parameter completion: Called when buffer is fully drained
-    func startSkipping(completion: @escaping () -> Void) {
+    func startSkipping() {
         isSkipping = true
-        skipCompletionHandler = completion
         logger.info("Started buffer skipping mode. Current queue: \(queueBytesOut) bytes")
     }
 
     /// Stops skipping mode and returns to normal operation.
     func stopSkipping() {
         isSkipping = false
-        skipCompletionHandler = nil
         logger.info("Stopped buffer skipping mode.")
     }
 
@@ -160,12 +156,10 @@ final actor RTMPSocket {
                     totalBytesOut += data.count
                     queueBytesOut -= data.count
                     
-                    // Check if buffer is drained in skip mode
+                    // Automatically stop skipping when buffer is drained
                     if isSkipping && queueBytesOut <= 0 {
-                        logger.info("Buffer fully drained in skip mode")
-                        let handler = skipCompletionHandler
+                        logger.info("Buffer fully drained, stopping skip mode")
                         stopSkipping()
-                        handler?()
                     }
                 }
             }
