@@ -88,6 +88,10 @@ final actor RTMPSocket {
         guard connected else {
             return
         }
+        // In skipping mode, discard data to drain buffer
+        if isSkipping {
+            return
+        }
         queueBytesOut += data.count
         outputs?.yield(data)
     }
@@ -97,6 +101,10 @@ final actor RTMPSocket {
             return
         }
         for data in iterator {
+            // In skipping mode, discard data to drain buffer
+            if isSkipping {
+                continue
+            }
             queueBytesOut += data.count
             outputs?.yield(data)
         }
