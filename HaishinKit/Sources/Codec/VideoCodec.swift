@@ -76,6 +76,19 @@ final class VideoCodec {
         }
     }
 
+    func requestKeyFrame() {
+        guard let session else {
+            return
+        }
+        // Request next frame to be encoded as a key frame (I-frame)
+        let status = session.setOption(.init(key: .forceKeyFrame, value: kCFBooleanTrue))
+        if status == noErr {
+            logger.info("Requested key frame for next encoding")
+        } else {
+            logger.warn("Failed to request key frame, status: \\(status)")
+        }
+    }
+
     func makeImageBufferAttributes(_ mode: VTSessionMode) -> [NSString: AnyObject]? {
         switch mode {
         case .compression:

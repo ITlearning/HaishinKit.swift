@@ -93,6 +93,11 @@ package final class OutgoingStream {
     package func append(video sampleBuffer: CMSampleBuffer) {
         videoCodec.append(sampleBuffer)
     }
+
+    /// Requests the next encoded frame to be a key frame (I-frame).
+    package func requestKeyFrame() {
+        videoCodec.requestKeyFrame()
+    }
 }
 
 extension OutgoingStream: Runner {
