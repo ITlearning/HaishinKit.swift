@@ -88,12 +88,9 @@ final actor RTMPSocket {
         guard connected else {
             return
         }
-        // In skipping mode, only send key frames to minimize pixelation
+        // In skipping mode, drop all new frames to drain the buffer quickly
         if isSkipping {
-            if isKeyFrame(data) {
-                queueBytesOut += data.count
-                outputs?.yield(data)
-            }
+            // Drop the frame - do not add to queue
             return
         }
         queueBytesOut += data.count
@@ -105,12 +102,9 @@ final actor RTMPSocket {
             return
         }
         for data in iterator {
-            // In skipping mode, only send key frames to minimize pixelation
+            // In skipping mode, drop all new frames to drain the buffer quickly
             if isSkipping {
-                if isKeyFrame(data) {
-                    queueBytesOut += data.count
-                    outputs?.yield(data)
-                }
+                // Drop the frame - do not add to queue
                 continue
             }
             queueBytesOut += data.count
