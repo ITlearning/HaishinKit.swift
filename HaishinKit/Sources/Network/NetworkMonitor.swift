@@ -75,14 +75,12 @@ package final actor NetworkMonitor {
         )
         // Calculate estimated delay based on queue size and average output rate
         // Use moving average of last 5 seconds to smooth out temporary fluctuations
+        // Filter out zero values to avoid underestimating throughput during bursty transmission
         let estimatedDelay: TimeInterval
-        if !recentBytesOutPerSecond.isEmpty {
-            let avgBytesOutPerSecond = recentBytesOutPerSecond.reduce(0, +) / recentBytesOutPerSecond.count
-            if avgBytesOutPerSecond > 0 {
-                estimatedDelay = TimeInterval(queueBytesOut) / TimeInterval(avgBytesOutPerSecond)
-            } else {
-                estimatedDelay = 0
-            }
+        let nonZeroRates = recentBytesOutPerSecond.filter { $0 > 0 }
+        if !nonZeroRates.isEmpty {
+            let avgBytesOutPerSecond = nonZeroRates.reduce(0, +) / nonZeroRates.count
+            estimatedDelay = TimeInterval(queueBytesOut) / TimeInterval(avgBytesOutPerSecond)
         } else {
             estimatedDelay = 0
         }
