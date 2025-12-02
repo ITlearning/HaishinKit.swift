@@ -81,6 +81,14 @@ package final actor NetworkMonitor {
         if !nonZeroRates.isEmpty {
             let avgBytesOutPerSecond = nonZeroRates.reduce(0, +) / nonZeroRates.count
             estimatedDelay = TimeInterval(queueBytesOut) / TimeInterval(avgBytesOutPerSecond)
+            
+            // Debug logging: Show delay calculation details every second
+            logger.info("""
+                [NetworkMonitor] Delay: \(String(format: "%.2f", estimatedDelay))s | \
+                Queue: \(String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024))MB | \
+                Avg Rate: \(avgBytesOutPerSecond / 1024)KB/s (\(nonZeroRates.count)/\(recentBytesOutPerSecond.count) samples) | \
+                Current: \(currentBytesOutPerSecond / 1024)KB/s
+                """)
         } else {
             estimatedDelay = 0
         }
