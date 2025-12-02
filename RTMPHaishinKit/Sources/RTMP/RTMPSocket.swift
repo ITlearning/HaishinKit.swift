@@ -151,13 +151,15 @@ final actor RTMPSocket {
     /// Starts skipping mode to quickly drain the buffer.
     func startSkipping() {
         isSkipping = true
-        logger.info("Started buffer skipping mode. Current queue: \(queueBytesOut) bytes")
+        let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
+        logger.info("[NetworkMonitor] Started buffer skipping mode. Current queue: \(queueMB)MB (\(queueBytesOut) bytes)")
     }
 
     /// Stops skipping mode and returns to normal operation.
     func stopSkipping() {
         isSkipping = false
-        logger.info("Stopped buffer skipping mode.")
+        let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
+        logger.info("[NetworkMonitor] Stopped buffer skipping mode. Final queue: \(queueMB)MB (\(queueBytesOut) bytes)")
     }
 
     /// Checks if the data contains a key frame (I-frame).
@@ -183,7 +185,8 @@ final actor RTMPSocket {
                     
                     // Automatically stop skipping when buffer is drained
                     if isSkipping && queueBytesOut <= 0 {
-                        logger.info("Buffer fully drained, stopping skip mode")
+                        let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
+                        logger.info("[NetworkMonitor] Buffer fully drained (\(queueMB)MB remaining), stopping skip mode")
                         stopSkipping()
                     }
                 }

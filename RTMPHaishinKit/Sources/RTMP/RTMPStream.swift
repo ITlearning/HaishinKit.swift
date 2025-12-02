@@ -796,7 +796,9 @@ extension RTMPStream: _Stream {
     public func dispatch(_ event: NetworkMonitorEvent) async {
         // Handle buffer delay exceeded before bitrate strategy
         if case .bufferDelayExceeded(let report, let estimatedDelay) = event {
-            logger.warn("Buffer delay exceeded: \(estimatedDelay)s (queue: \(report.currentQueueBytesOut) bytes)")
+            let delayStr = String(format: "%.2f", estimatedDelay)
+            let queueMB = String(format: "%.2f", Double(report.currentQueueBytesOut) / 1024 / 1024)
+            logger.warn("[NetworkMonitor] Buffer delay exceeded: \(delayStr)s (queue: \(queueMB)MB)")
             await connection?.startBufferSkipping()
             
             // Calculate optimal I-frame interval based on delay and FPS
@@ -814,7 +816,7 @@ extension RTMPStream: _Stream {
             settings.maxKeyFrameIntervalDuration = newDuration
             
             let fps = settings.expectedFrameRate ?? 30
-            logger.info("Adjusted I-frame interval: \(originalMaxKeyFrameIntervalDuration ?? 0)s → \(newDuration)s (~\(Int(Double(fps) * Double(newDuration))) frames at \(fps)fps)")
+            logger.info("[NetworkMonitor] Adjusted I-frame interval: \(originalMaxKeyFrameIntervalDuration ?? 0)s → \(newDuration)s (~\(Int(Double(fps) * Double(newDuration))) frames at \(fps)fps)")
             
             try? setVideoSettings(settings)
             outgoing.requestKeyFrame()
@@ -826,7 +828,7 @@ extension RTMPStream: _Stream {
                     var restoreSettings = outgoing.videoSettings
                     restoreSettings.maxKeyFrameIntervalDuration = original
                     try? setVideoSettings(restoreSettings)
-                    logger.info("Restored I-frame interval to \(original)s")
+                    logger.info("[NetworkMonitor] Restored I-frame interval to \(original)s")
                     originalMaxKeyFrameIntervalDuration = nil
                 }
             }
