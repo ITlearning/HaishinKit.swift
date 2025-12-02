@@ -19,6 +19,7 @@ final actor RTMPSocket {
     private var totalBytesIn = 0
     private var queueBytesOut = 0
     private var totalBytesOut = 0
+    private var isSkipping = false
     private var parameters: NWParameters = .tcp
     private var connection: NWConnection? {
         didSet {
@@ -87,6 +88,11 @@ final actor RTMPSocket {
         guard connected else {
             return
         }
+        // In skipping mode, drop all new frames to drain the buffer quickly
+        if isSkipping {
+            // Drop the frame - do not add to queue
+            return
+        }
         queueBytesOut += data.count
         outputs?.yield(data)
     }
@@ -96,6 +102,11 @@ final actor RTMPSocket {
             return
         }
         for data in iterator {
+            // In skipping mode, drop all new frames to drain the buffer quickly
+            if isSkipping {
+                // Drop the frame - do not add to queue
+                continue
+            }
             queueBytesOut += data.count
             outputs?.yield(data)
         }
@@ -133,17 +144,14 @@ final actor RTMPSocket {
 
     /// Starts skipping mode to quickly drain the buffer.
     func startSkipping() {
+        isSkipping = true
         let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
-        logger.info("[NetworkMonitor] Started buffer skipping mode. Discarding queue: \(queueMB)MB (\(queueBytesOut) bytes)")
-        
-        // Clear the counter immediately - we're discarding the buffer
-        queueBytesOut = 0
-        
-        logger.info("[NetworkMonitor] Buffer discarded, resuming transmission")
+        logger.info("[NetworkMonitor] Started buffer skipping mode. Current queue: \(queueMB)MB (\(queueBytesOut) bytes)")
     }
 
     /// Stops skipping mode and returns to normal operation.
     func stopSkipping() {
+        isSkipping = false
         let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
         logger.info("[NetworkMonitor] Stopped buffer skipping mode. Final queue: \(queueMB)MB (\(queueBytesOut) bytes)")
     }
@@ -165,6 +173,20 @@ final actor RTMPSocket {
             let (stream, continuation) = AsyncStream<Data>.makeStream()
             Task {
                 for await data in stream where connected {
+                    // In skip mode, drop buffered data without sending
+                    if isSkipping {
+                        queueBytesOut -= data.count
+                        
+                        // Stop skipping when buffer is fully drained
+                        if queueBytesOut <= 0 {
+                            queueBytesOut = 0
+                            let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
+                            logger.info("[NetworkMonitor] Buffer fully drained (\(queueMB)MB remaining), stopping skip mode")
+                            stopSkipping()
+                        }
+                        continue
+                    }
+                    
                     try await send(data)
                     totalBytesOut += data.count
                     queueBytesOut -= data.count
