@@ -20,6 +20,7 @@ final actor RTMPSocket {
     private var queueBytesOut = 0
     private var totalBytesOut = 0
     private var isSkipping = false
+    private var waitingForKeyFrame = false
     private var parameters: NWParameters = .tcp
     private var connection: NWConnection? {
         didSet {
@@ -93,6 +94,16 @@ final actor RTMPSocket {
             // Drop the frame - do not add to queue
             return
         }
+        // After skip mode, wait for I-frame before resuming transmission
+        if waitingForKeyFrame {
+            if isKeyFrame(data) {
+                waitingForKeyFrame = false
+                logger.info("[NetworkMonitor] I-frame received, resuming normal transmission")
+            } else {
+                // Drop P-frames until we get an I-frame
+                return
+            }
+        }
         queueBytesOut += data.count
         outputs?.yield(data)
     }
@@ -106,6 +117,16 @@ final actor RTMPSocket {
             if isSkipping {
                 // Drop the frame - do not add to queue
                 continue
+            }
+            // After skip mode, wait for I-frame before resuming transmission
+            if waitingForKeyFrame {
+                if isKeyFrame(data) {
+                    waitingForKeyFrame = false
+                    logger.info("[NetworkMonitor] I-frame received, resuming normal transmission")
+                } else {
+                    // Drop P-frames until we get an I-frame
+                    continue
+                }
             }
             queueBytesOut += data.count
             outputs?.yield(data)
@@ -152,8 +173,9 @@ final actor RTMPSocket {
     /// Stops skipping mode and returns to normal operation.
     func stopSkipping() {
         isSkipping = false
+        waitingForKeyFrame = true
         let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
-        logger.info("[NetworkMonitor] Stopped buffer skipping mode. Final queue: \(queueMB)MB (\(queueBytesOut) bytes)")
+        logger.info("[NetworkMonitor] Stopped buffer skipping mode. Waiting for I-frame. Final queue: \(queueMB)MB (\(queueBytesOut) bytes)")
     }
 
     /// Checks if the data contains a key frame (I-frame).
