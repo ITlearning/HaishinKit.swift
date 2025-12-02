@@ -89,21 +89,23 @@ final actor RTMPSocket {
         guard connected else {
             return
         }
-        // In skipping mode, drop all new frames to drain the buffer quickly
-        if isSkipping {
-            // Drop the frame - do not add to queue
+        
+        // During skip mode or waiting for I-frame, only accept I-frames
+        if isSkipping || waitingForKeyFrame {
+            if isKeyFrame(data) {
+                // First I-frame after skip mode
+                if waitingForKeyFrame {
+                    waitingForKeyFrame = false
+                    logger.info("[NetworkMonitor] I-frame received, resuming normal transmission")
+                }
+                // Add I-frame to queue and continue
+                queueBytesOut += data.count
+                outputs?.yield(data)
+            }
+            // Drop P-frames during skip/waiting
             return
         }
-        // After skip mode, wait for I-frame before resuming transmission
-        if waitingForKeyFrame {
-            if isKeyFrame(data) {
-                waitingForKeyFrame = false
-                logger.info("[NetworkMonitor] I-frame received, resuming normal transmission")
-            } else {
-                // Drop P-frames until we get an I-frame
-                return
-            }
-        }
+        
         queueBytesOut += data.count
         outputs?.yield(data)
     }
@@ -113,21 +115,22 @@ final actor RTMPSocket {
             return
         }
         for data in iterator {
-            // In skipping mode, drop all new frames to drain the buffer quickly
-            if isSkipping {
-                // Drop the frame - do not add to queue
+            // During skip mode or waiting for I-frame, only accept I-frames
+            if isSkipping || waitingForKeyFrame {
+                if isKeyFrame(data) {
+                    // First I-frame after skip mode
+                    if waitingForKeyFrame {
+                        waitingForKeyFrame = false
+                        logger.info("[NetworkMonitor] I-frame received, resuming normal transmission")
+                    }
+                    // Add I-frame to queue and continue
+                    queueBytesOut += data.count
+                    outputs?.yield(data)
+                }
+                // Drop P-frames during skip/waiting
                 continue
             }
-            // After skip mode, wait for I-frame before resuming transmission
-            if waitingForKeyFrame {
-                if isKeyFrame(data) {
-                    waitingForKeyFrame = false
-                    logger.info("[NetworkMonitor] I-frame received, resuming normal transmission")
-                } else {
-                    // Drop P-frames until we get an I-frame
-                    continue
-                }
-            }
+            
             queueBytesOut += data.count
             outputs?.yield(data)
         }
