@@ -146,7 +146,26 @@ final actor RTMPSocket {
     func startSkipping() {
         isSkipping = true
         let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
-        logger.info("[NetworkMonitor] Started buffer skipping mode. Current queue: \(queueMB)MB (\(queueBytesOut) bytes)")
+        logger.info("[NetworkMonitor] Started buffer skipping mode. Clearing queue: \(queueMB)MB (\(queueBytesOut) bytes)")
+        
+        // Immediately clear the queue and recreate the stream to drop pending data
+        queueBytesOut = 0
+        
+        // Finish old stream and create new one - this drops all pending data
+        outputs?.finish()
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        Task {
+            for await data in stream where connected {
+                try await send(data)
+                totalBytesOut += data.count
+                queueBytesOut -= data.count
+            }
+        }
+        outputs = continuation
+        
+        // Exit skip mode immediately since queue is cleared
+        isSkipping = false
+        logger.info("[NetworkMonitor] Queue cleared, jumped to live stream")
     }
 
     /// Stops skipping mode and returns to normal operation.
