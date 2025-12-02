@@ -19,8 +19,6 @@ final actor RTMPSocket {
     private var totalBytesIn = 0
     private var queueBytesOut = 0
     private var totalBytesOut = 0
-    private var isSkipping = false
-    private var waitingForKeyFrame = false
     private var parameters: NWParameters = .tcp
     private var connection: NWConnection? {
         didSet {
@@ -89,23 +87,6 @@ final actor RTMPSocket {
         guard connected else {
             return
         }
-        
-        // During skip mode or waiting for I-frame, only accept I-frames
-        if isSkipping || waitingForKeyFrame {
-            if isKeyFrame(data) {
-                // First I-frame after skip mode
-                if waitingForKeyFrame {
-                    waitingForKeyFrame = false
-                    logger.info("[NetworkMonitor] I-frame received, resuming normal transmission")
-                }
-                // Add I-frame to queue and continue
-                queueBytesOut += data.count
-                outputs?.yield(data)
-            }
-            // Drop P-frames during skip/waiting
-            return
-        }
-        
         queueBytesOut += data.count
         outputs?.yield(data)
     }
@@ -115,22 +96,6 @@ final actor RTMPSocket {
             return
         }
         for data in iterator {
-            // During skip mode or waiting for I-frame, only accept I-frames
-            if isSkipping || waitingForKeyFrame {
-                if isKeyFrame(data) {
-                    // First I-frame after skip mode
-                    if waitingForKeyFrame {
-                        waitingForKeyFrame = false
-                        logger.info("[NetworkMonitor] I-frame received, resuming normal transmission")
-                    }
-                    // Add I-frame to queue and continue
-                    queueBytesOut += data.count
-                    outputs?.yield(data)
-                }
-                // Drop P-frames during skip/waiting
-                continue
-            }
-            
             queueBytesOut += data.count
             outputs?.yield(data)
         }
@@ -168,17 +133,19 @@ final actor RTMPSocket {
 
     /// Starts skipping mode to quickly drain the buffer.
     func startSkipping() {
-        isSkipping = true
         let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
-        logger.info("[NetworkMonitor] Started buffer skipping mode. Current queue: \(queueMB)MB (\(queueBytesOut) bytes)")
+        logger.info("[NetworkMonitor] Started buffer skipping mode. Discarding queue: \(queueMB)MB (\(queueBytesOut) bytes)")
+        
+        // Clear the counter immediately - we're discarding the buffer
+        queueBytesOut = 0
+        
+        logger.info("[NetworkMonitor] Buffer discarded, resuming transmission")
     }
 
     /// Stops skipping mode and returns to normal operation.
     func stopSkipping() {
-        isSkipping = false
-        waitingForKeyFrame = true
         let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
-        logger.info("[NetworkMonitor] Stopped buffer skipping mode. Waiting for I-frame. Final queue: \(queueMB)MB (\(queueBytesOut) bytes)")
+        logger.info("[NetworkMonitor] Stopped buffer skipping mode. Final queue: \(queueMB)MB (\(queueBytesOut) bytes)")
     }
 
     /// Checks if the data contains a key frame (I-frame).
@@ -198,20 +165,6 @@ final actor RTMPSocket {
             let (stream, continuation) = AsyncStream<Data>.makeStream()
             Task {
                 for await data in stream where connected {
-                    // In skip mode, drop buffered data without sending
-                    if isSkipping {
-                        queueBytesOut -= data.count
-                        
-                        // Stop skipping when buffer is fully drained
-                        if queueBytesOut <= 0 {
-                            queueBytesOut = 0
-                            let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
-                            logger.info("[NetworkMonitor] Buffer fully drained (\(queueMB)MB remaining), stopping skip mode")
-                            stopSkipping()
-                        }
-                        continue
-                    }
-                    
                     try await send(data)
                     totalBytesOut += data.count
                     queueBytesOut -= data.count
