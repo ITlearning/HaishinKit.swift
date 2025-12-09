@@ -733,6 +733,16 @@ extension RTMPStream: _Stream {
     }
 
     public func append(_ sampleBuffer: CMSampleBuffer) {
+        // Drop all samples during buffer skip mode to effectively drain the queue
+        Task {
+            if let connection = connection, await connection.isBufferSkipping {
+                return
+            }
+            await processAppend(sampleBuffer)
+        }
+    }
+    
+    private func processAppend(_ sampleBuffer: CMSampleBuffer) async {
         switch sampleBuffer.formatDescription?.mediaType {
         case .video:
             if sampleBuffer.formatDescription?.isCompressed == true {
@@ -773,6 +783,16 @@ extension RTMPStream: _Stream {
     }
 
     public func append(_ audioBuffer: AVAudioBuffer, when: AVAudioTime) {
+        // Drop all samples during buffer skip mode to effectively drain the queue
+        Task {
+            if let connection = connection, await connection.isBufferSkipping {
+                return
+            }
+            await processAppend(audioBuffer, when: when)
+        }
+    }
+    
+    private func processAppend(_ audioBuffer: AVAudioBuffer, when: AVAudioTime) async {
         switch audioBuffer {
         case let audioBuffer as AVAudioCompressedBuffer:
             do {
@@ -796,9 +816,7 @@ extension RTMPStream: _Stream {
     public func dispatch(_ event: NetworkMonitorEvent) async {
         // Handle buffer delay exceeded before bitrate strategy
         if case .bufferDelayExceeded(let report, let estimatedDelay) = event {
-            let delayStr = String(format: "%.2f", estimatedDelay)
-            let queueMB = String(format: "%.2f", Double(report.currentQueueBytesOut) / 1024 / 1024)
-            logger.warn("[NetworkMonitor] Buffer delay exceeded: \(delayStr)s (queue: \(queueMB)MB)")
+            logger.warn("Buffer delay exceeded: \(estimatedDelay)s (queue: \(report.currentQueueBytesOut) bytes)")
             await connection?.startBufferSkipping()
             
             // Calculate optimal I-frame interval based on delay and FPS
@@ -816,7 +834,7 @@ extension RTMPStream: _Stream {
             settings.maxKeyFrameIntervalDuration = newDuration
             
             let fps = settings.expectedFrameRate ?? 30
-            logger.info("[NetworkMonitor] Adjusted I-frame interval: \(originalMaxKeyFrameIntervalDuration ?? 0)s → \(newDuration)s (~\(Int(Double(fps) * Double(newDuration))) frames at \(fps)fps)")
+            logger.info("Adjusted I-frame interval: \(originalMaxKeyFrameIntervalDuration ?? 0)s → \(newDuration)s (~\(Int(Double(fps) * Double(newDuration))) frames at \(fps)fps)")
             
             try? setVideoSettings(settings)
             outgoing.requestKeyFrame()
@@ -828,7 +846,7 @@ extension RTMPStream: _Stream {
                     var restoreSettings = outgoing.videoSettings
                     restoreSettings.maxKeyFrameIntervalDuration = original
                     try? setVideoSettings(restoreSettings)
-                    logger.info("[NetworkMonitor] Restored I-frame interval to \(original)s")
+                    logger.info("Restored I-frame interval to \(original)s")
                     originalMaxKeyFrameIntervalDuration = nil
                 }
             }

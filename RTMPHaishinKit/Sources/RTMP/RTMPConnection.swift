@@ -197,10 +197,19 @@ public actor RTMPConnection: HaishinKit.NetworkConnection {
 
     private var socket: RTMPSocket?
     
+    /// Indicates whether buffer skipping mode is currently active.
+    @Published public private(set) var isBufferSkipping = false
+    
     /// Starts buffer skipping mode to drain accumulated buffer.
     package func startBufferSkipping() async {
         guard let rtmpSocket = socket else { return }
+        isBufferSkipping = true
         await rtmpSocket.startSkipping()
+    }
+    
+    /// Stops buffer skipping mode.
+    package func stopBufferSkipping() async {
+        isBufferSkipping = false
     }
     
     /// Sets the buffer delay threshold for automatic buffer flush.
