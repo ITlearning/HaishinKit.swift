@@ -209,6 +209,7 @@ public actor RTMPConnection: HaishinKit.NetworkConnection {
     
     /// Stops buffer skipping mode.
     package func stopBufferSkipping() async {
+        logger.info("[SkipMode] RTMPConnection stopBufferSkipping called")
         isBufferSkipping = false
     }
     
@@ -355,6 +356,7 @@ public actor RTMPConnection: HaishinKit.NetworkConnection {
         chunkSizeS = RTMPChunkMessageHeader.chunkSize
         currentTransactionId = Self.connectTransactionId
         socket = RTMPSocket(qualityOfService: qualityOfService, securityLevel: secure ? .negotiatedSSL : .none)
+        await socket?.setConnection(self)
         networkMonitor = await socket?.makeNetworkMonitor()
         guard let socket, let networkMonitor else {
             throw Error.invalidState

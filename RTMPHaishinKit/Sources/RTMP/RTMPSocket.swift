@@ -22,6 +22,7 @@ final actor RTMPSocket {
     private var isSkipping = false
     private var skipModeInitialQueueSize = 0
     private var parameters: NWParameters = .tcp
+    private weak var rtmpConnection: RTMPConnection?
     private var connection: NWConnection? {
         didSet {
             oldValue?.viabilityUpdateHandler = nil
@@ -49,6 +50,10 @@ final actor RTMPSocket {
         default:
             parameters = .tcp
         }
+    }
+    
+    func setConnection(_ connection: RTMPConnection) {
+        self.rtmpConnection = connection
     }
 
     func connect(_ name: String, port: Int) async throws {
@@ -169,6 +174,13 @@ final actor RTMPSocket {
         isSkipping = false
         let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
         logger.info("[NetworkMonitor] Stopped buffer skipping mode. Final queue: \(queueMB)MB (\(queueBytesOut) bytes)")
+        
+        // Notify connection to stop skip mode
+        if let rtmpConnection = rtmpConnection {
+            Task {
+                await rtmpConnection.stopBufferSkipping()
+            }
+        }
     }
 
     /// Checks if the data contains a key frame (I-frame).

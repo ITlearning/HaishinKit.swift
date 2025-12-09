@@ -741,7 +741,13 @@ extension RTMPStream: _Stream {
                 if sampleBuffer.formatDescription?.mediaType == .video,
                    sampleBuffer.formatDescription?.isCompressed == true,
                    await isKeyFrame(sampleBuffer) {
+                    logger.info("[SkipMode] Accepting I-frame during skip mode")
                     await processAppend(sampleBuffer)
+                } else {
+                    // Log first few dropped frames to verify skip mode is working
+                    if Int.random(in: 0..<100) == 0 {
+                        logger.info("[SkipMode] Dropping non-I-frame during skip mode")
+                    }
                 }
                 return
             }
