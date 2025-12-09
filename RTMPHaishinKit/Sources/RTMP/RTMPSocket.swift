@@ -20,10 +20,7 @@ final actor RTMPSocket {
     private var queueBytesOut = 0
     private var totalBytesOut = 0
     private var isSkipping = false
-    private var fastTransmitMode = false
-    private var newIFrameReceived = false
-    private var bytesProcessedInSkip = 0
-    private var lastIFramePosition = 0
+    private var skipModeInitialQueueSize = 0
     private var parameters: NWParameters = .tcp
     private var connection: NWConnection? {
         didSet {
@@ -92,13 +89,12 @@ final actor RTMPSocket {
         guard connected else {
             return
         }
-        // In skipping mode, check if this is a new I-frame
+        // In skipping mode, only send key frames to minimize pixelation
         if isSkipping {
-            if isKeyFrame(data) && !newIFrameReceived {
-                newIFrameReceived = true
-                logger.info("[NetworkMonitor] New I-frame detected during skip mode, will transition after last I-frame in buffer")
+            if isKeyFrame(data) {
+                queueBytesOut += data.count
+                outputs?.yield(data)
             }
-            // Drop all new frames during skip - they'll be re-requested
             return
         }
         queueBytesOut += data.count
@@ -110,9 +106,12 @@ final actor RTMPSocket {
             return
         }
         for data in iterator {
-            // In skipping mode, drop all new frames to drain the buffer quickly
+            // In skipping mode, only send key frames to minimize pixelation
             if isSkipping {
-                // Drop the frame - do not add to queue
+                if isKeyFrame(data) {
+                    queueBytesOut += data.count
+                    outputs?.yield(data)
+                }
                 continue
             }
             queueBytesOut += data.count
@@ -152,22 +151,30 @@ final actor RTMPSocket {
 
     /// Starts skipping mode to quickly drain the buffer.
     func startSkipping() {
+        guard !isSkipping else {
+            return // Already in skip mode, don't restart
+        }
         isSkipping = true
-        fastTransmitMode = true
-        newIFrameReceived = false
-        bytesProcessedInSkip = 0
-        lastIFramePosition = 0
+        skipModeInitialQueueSize = queueBytesOut
         let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
-        logger.info("[NetworkMonitor] Started buffer skipping mode with fast transmission. Current queue: \(queueMB)MB (\(queueBytesOut) bytes)")
+        logger.info("[NetworkMonitor] Started buffer skipping mode. Current queue: \(queueMB)MB (\(queueBytesOut) bytes)")
+        
+        // Auto-stop skip mode after 2 seconds to prevent complete drain
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+            if isSkipping {
+                logger.info("[NetworkMonitor] Auto-stopping skip mode after 2 seconds to prevent disconnect")
+                stopSkipping()
+            }
+        }
     }
 
     /// Stops skipping mode and returns to normal operation.
     func stopSkipping() {
+        guard isSkipping else {
+            return // Not in skip mode
+        }
         isSkipping = false
-        fastTransmitMode = false
-        newIFrameReceived = false
-        bytesProcessedInSkip = 0
-        lastIFramePosition = 0
         let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
         logger.info("[NetworkMonitor] Stopped buffer skipping mode. Final queue: \(queueMB)MB (\(queueBytesOut) bytes)")
     }
@@ -189,37 +196,17 @@ final actor RTMPSocket {
             let (stream, continuation) = AsyncStream<Data>.makeStream()
             Task {
                 for await data in stream where connected {
-                    // Hybrid skip mode: fast transmit until new I-frame, then drop rest
+                    // In skip mode, add small delay between sends to allow new I-frames to arrive
+                    // 10ms delay = ~100KB/s transmission (matches normal bitrate)
                     if isSkipping {
-                        bytesProcessedInSkip += data.count
+                        // Sleep for 10ms between sends
+                        try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
                         
-                        // Track last I-frame position in buffer
-                        if isKeyFrame(data) {
-                            lastIFramePosition = bytesProcessedInSkip
-                        }
-                        
-                        // If new I-frame received and we've passed last I-frame in buffer, start dropping
-                        if newIFrameReceived && bytesProcessedInSkip > lastIFramePosition {
-                            // Drop remaining old frames
-                            queueBytesOut -= data.count
-                            
-                            if queueBytesOut <= 0 {
-                                queueBytesOut = 0
-                                logger.info("[NetworkMonitor] Transitioned to new I-frame, old buffer cleared")
-                                stopSkipping()
-                            }
-                            continue
-                        }
-                        
-                        // Fast transmission mode: send at 2x speed
-                        if fastTransmitMode {
-                            try await send(data)
-                            totalBytesOut += data.count
-                            queueBytesOut -= data.count
-                            
-                            // Add minimal delay for 2x speed (~0.5ms per chunk)
-                            try? await Task.sleep(nanoseconds: 500_000)
-                            continue
+                        // Stop skip mode when buffer is reduced to 1MB
+                        if queueBytesOut <= 1024 * 1024 {
+                            let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
+                            logger.info("[NetworkMonitor] Buffer at \(queueMB)MB, stopping skip mode")
+                            stopSkipping()
                         }
                     }
                     
