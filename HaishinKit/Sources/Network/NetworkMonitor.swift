@@ -29,6 +29,7 @@ package final actor NetworkMonitor {
     private var previousQueueBytesOut: [Int] = []
     private var recentBytesOutPerSecond: [Int] = []  // Track recent throughput for averaging
     package private(set) var bufferDelayThreshold: TimeInterval
+    private var targetDelayAfterSkip: TimeInterval = 7.0  // Target: 5-7 seconds RTMP minimum latency
     private var continuation: AsyncStream<NetworkMonitorEvent>.Continuation? {
         didSet {
             oldValue?.finish()
@@ -92,6 +93,12 @@ package final actor NetworkMonitor {
         } else {
             estimatedDelay = 0
         }
+        
+        // Check if delay reached target during skip mode
+        if estimatedDelay <= targetDelayAfterSkip && estimatedDelay > 0 {
+            return .bufferDelayTargetReached(report: eventReport, estimatedDelay: estimatedDelay)
+        }
+        
         // Check if buffer delay exceeds threshold
         if estimatedDelay > bufferDelayThreshold {
             return .bufferDelayExceeded(report: eventReport, estimatedDelay: estimatedDelay)

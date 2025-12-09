@@ -536,6 +536,9 @@ public actor RTMPConnection: HaishinKit.NetworkConnection {
         case .bufferDelayExceeded:
             // Buffer delay is handled at stream level
             break
+        case .bufferDelayTargetReached:
+            // Target delay reached - handled at stream level
+            break
         case .reset:
             // noop
             break

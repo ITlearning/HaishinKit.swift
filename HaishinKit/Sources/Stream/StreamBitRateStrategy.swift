@@ -41,6 +41,9 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
             } else {
                 sufficientBWCounts += 1
             }
+        case .bufferDelayTargetReached:
+            // Skip mode ended, target delay reached - no bitrate adjustment needed
+            break
         case .publishInsufficientBWOccured(let report):
             sufficientBWCounts = 0
             var videoSettings = await stream.videoSettings

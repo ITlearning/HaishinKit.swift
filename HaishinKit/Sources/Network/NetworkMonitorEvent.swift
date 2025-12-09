@@ -8,6 +8,8 @@ public enum NetworkMonitorEvent: Sendable {
     case publishInsufficientBWOccured(report: NetworkMonitorReport)
     /// Buffer delay exceeded threshold.
     case bufferDelayExceeded(report: NetworkMonitorReport, estimatedDelay: TimeInterval)
+    /// Buffer delay reached target during skip mode.
+    case bufferDelayTargetReached(report: NetworkMonitorReport, estimatedDelay: TimeInterval)
     /// To reset  statistics.
     case reset
 }

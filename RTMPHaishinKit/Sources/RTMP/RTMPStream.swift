@@ -843,6 +843,24 @@ extension RTMPStream: _Stream {
     }
 
     public func dispatch(_ event: NetworkMonitorEvent) async {
+        // Handle buffer delay target reached - stop skip mode
+        if case .bufferDelayTargetReached(let report, let estimatedDelay) = event {
+            logger.info("Buffer delay reached target: \(estimatedDelay)s (queue: \(report.currentQueueBytesOut) bytes)")
+            await connection?.stopBufferSkipping()
+            
+            // Restore original I-frame interval
+            if let original = originalMaxKeyFrameIntervalDuration {
+                var restoreSettings = outgoing.videoSettings
+                restoreSettings.maxKeyFrameIntervalDuration = original
+                try? setVideoSettings(restoreSettings)
+                logger.info("Restored I-frame interval to \(original)s")
+                originalMaxKeyFrameIntervalDuration = nil
+            }
+            
+            // Request key frame to ensure smooth transition
+            outgoing.requestKeyFrame()
+        }
+        
         // Handle buffer delay exceeded before bitrate strategy
         if case .bufferDelayExceeded(let report, let estimatedDelay) = event {
             logger.warn("Buffer delay exceeded: \(estimatedDelay)s (queue: \(report.currentQueueBytesOut) bytes)")
@@ -868,17 +886,7 @@ extension RTMPStream: _Stream {
             try? setVideoSettings(settings)
             outgoing.requestKeyFrame()
             
-            // Restore original interval after delay recovery (10 seconds)
-            Task {
-                try? await Task.sleep(nanoseconds: 10_000_000_000)
-                if let original = originalMaxKeyFrameIntervalDuration {
-                    var restoreSettings = outgoing.videoSettings
-                    restoreSettings.maxKeyFrameIntervalDuration = original
-                    try? setVideoSettings(restoreSettings)
-                    logger.info("Restored I-frame interval to \(original)s")
-                    originalMaxKeyFrameIntervalDuration = nil
-                }
-            }
+            // I-frame interval will be restored when target delay is reached
         }
         
         await bitRateStrategy?.adjustBitrate(event, stream: self)
