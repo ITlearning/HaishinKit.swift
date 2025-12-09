@@ -20,6 +20,7 @@ final actor RTMPSocket {
     private var queueBytesOut = 0
     private var totalBytesOut = 0
     private var isSkipping = false
+    private var skipModeInitialQueueSize = 0
     private var parameters: NWParameters = .tcp
     private var connection: NWConnection? {
         didSet {
@@ -88,9 +89,12 @@ final actor RTMPSocket {
         guard connected else {
             return
         }
-        // In skipping mode, drop all new frames to drain the buffer quickly
+        // In skipping mode, only send key frames to minimize pixelation
         if isSkipping {
-            // Drop the frame - do not add to queue
+            if isKeyFrame(data) {
+                queueBytesOut += data.count
+                outputs?.yield(data)
+            }
             return
         }
         queueBytesOut += data.count
@@ -102,9 +106,12 @@ final actor RTMPSocket {
             return
         }
         for data in iterator {
-            // In skipping mode, drop all new frames to drain the buffer quickly
+            // In skipping mode, only send key frames to minimize pixelation
             if isSkipping {
-                // Drop the frame - do not add to queue
+                if isKeyFrame(data) {
+                    queueBytesOut += data.count
+                    outputs?.yield(data)
+                }
                 continue
             }
             queueBytesOut += data.count
@@ -144,13 +151,29 @@ final actor RTMPSocket {
 
     /// Starts skipping mode to quickly drain the buffer.
     func startSkipping() {
+        guard !isSkipping else {
+            return // Already in skip mode, don't restart
+        }
         isSkipping = true
+        skipModeInitialQueueSize = queueBytesOut
         let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
         logger.info("[NetworkMonitor] Started buffer skipping mode. Current queue: \(queueMB)MB (\(queueBytesOut) bytes)")
+        
+        // Auto-stop skip mode after 2 seconds to prevent complete drain
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+            if isSkipping {
+                logger.info("[NetworkMonitor] Auto-stopping skip mode after 2 seconds to prevent disconnect")
+                stopSkipping()
+            }
+        }
     }
 
     /// Stops skipping mode and returns to normal operation.
     func stopSkipping() {
+        guard isSkipping else {
+            return // Not in skip mode
+        }
         isSkipping = false
         let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
         logger.info("[NetworkMonitor] Stopped buffer skipping mode. Final queue: \(queueMB)MB (\(queueBytesOut) bytes)")
@@ -173,18 +196,18 @@ final actor RTMPSocket {
             let (stream, continuation) = AsyncStream<Data>.makeStream()
             Task {
                 for await data in stream where connected {
-                    // In skip mode, drop buffered data without sending
+                    // In skip mode, add delay between sends to prevent complete queue drain
+                    // This allows new I-frames to arrive while gradually reducing the buffer
                     if isSkipping {
-                        queueBytesOut -= data.count
+                        // Sleep for 100ms between sends to slow down transmission
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
                         
-                        // Stop skipping when buffer is fully drained
-                        if queueBytesOut <= 0 {
-                            queueBytesOut = 0
+                        // Stop skip mode when buffer is reduced to 1MB
+                        if queueBytesOut <= 1024 * 1024 {
                             let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
-                            logger.info("[NetworkMonitor] Buffer fully drained (\(queueMB)MB remaining), stopping skip mode")
+                            logger.info("[NetworkMonitor] Buffer at \(queueMB)MB, stopping skip mode")
                             stopSkipping()
                         }
-                        continue
                     }
                     
                     try await send(data)
