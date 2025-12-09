@@ -151,11 +151,11 @@ final actor RTMPSocket {
         let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
         logger.info("[NetworkMonitor] Started buffer skipping mode. Current queue: \(queueMB)MB (\(queueBytesOut) bytes)")
         
-        // Auto-stop skip mode after 2 seconds to prevent complete drain
+        // Auto-stop skip mode after 1 second for more frequent drain cycles
         Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
             if isSkipping {
-                logger.info("[NetworkMonitor] Auto-stopping skip mode after 2 seconds to prevent disconnect")
+                logger.info("[NetworkMonitor] Auto-stopping skip mode after 1 second")
                 stopSkipping()
             }
         }

@@ -229,6 +229,7 @@ public actor RTMPStream {
     package lazy var outgoing = OutgoingStream()
     private weak var connection: RTMPConnection?
     private var originalMaxKeyFrameIntervalDuration: Int32?
+    private var audioFrameCounter = 0
 
     private var audioFormat: AVAudioFormat? {
         didSet {
@@ -733,13 +734,29 @@ extension RTMPStream: _Stream {
     }
 
     public func append(_ sampleBuffer: CMSampleBuffer) {
-        // Drop all samples during buffer skip mode to effectively drain the queue
+        // During skip mode, only accept I-frames to maintain connection while reducing buffer
         Task {
             if let connection = connection, await connection.isBufferSkipping {
+                // Only process video I-frames during skip mode
+                if sampleBuffer.formatDescription?.mediaType == .video,
+                   sampleBuffer.formatDescription?.isCompressed == true,
+                   await isKeyFrame(sampleBuffer) {
+                    await processAppend(sampleBuffer)
+                }
                 return
             }
             await processAppend(sampleBuffer)
         }
+    }
+    
+    private func isKeyFrame(_ sampleBuffer: CMSampleBuffer) async -> Bool {
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]],
+              let firstAttachment = attachments.first else {
+            return false
+        }
+        // Check if this is a key frame (I-frame)
+        let notSync = firstAttachment[kCMSampleAttachmentKey_NotSync] as? Bool ?? false
+        return !notSync
     }
     
     private func processAppend(_ sampleBuffer: CMSampleBuffer) async {
@@ -783,11 +800,17 @@ extension RTMPStream: _Stream {
     }
 
     public func append(_ audioBuffer: AVAudioBuffer, when: AVAudioTime) {
-        // Drop all samples during buffer skip mode to effectively drain the queue
+        // During skip mode, accept audio at reduced rate to maintain connection
         Task {
             if let connection = connection, await connection.isBufferSkipping {
+                // Accept every 10th audio frame to keep stream alive
+                audioFrameCounter += 1
+                if audioFrameCounter % 10 == 0 {
+                    await processAppend(audioBuffer, when: when)
+                }
                 return
             }
+            audioFrameCounter = 0
             await processAppend(audioBuffer, when: when)
         }
     }
