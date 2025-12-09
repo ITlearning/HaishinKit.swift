@@ -89,12 +89,8 @@ final actor RTMPSocket {
         guard connected else {
             return
         }
-        // In skipping mode, only send key frames to minimize pixelation
+        // In skipping mode, drop all new frames to drain the buffer
         if isSkipping {
-            if isKeyFrame(data) {
-                queueBytesOut += data.count
-                outputs?.yield(data)
-            }
             return
         }
         queueBytesOut += data.count
@@ -106,12 +102,8 @@ final actor RTMPSocket {
             return
         }
         for data in iterator {
-            // In skipping mode, only send key frames to minimize pixelation
+            // In skipping mode, drop all new frames to drain the buffer
             if isSkipping {
-                if isKeyFrame(data) {
-                    queueBytesOut += data.count
-                    outputs?.yield(data)
-                }
                 continue
             }
             queueBytesOut += data.count
@@ -196,12 +188,8 @@ final actor RTMPSocket {
             let (stream, continuation) = AsyncStream<Data>.makeStream()
             Task {
                 for await data in stream where connected {
-                    // In skip mode, add small delay between sends to allow new I-frames to arrive
-                    // 10ms delay = ~100KB/s transmission (matches normal bitrate)
+                    // In skip mode, check if buffer is low enough to stop
                     if isSkipping {
-                        // Sleep for 10ms between sends
-                        try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
-                        
                         // Stop skip mode when buffer is reduced to 1MB
                         if queueBytesOut <= 1024 * 1024 {
                             let queueMB = String(format: "%.2f", Double(queueBytesOut) / 1024 / 1024)
