@@ -167,7 +167,7 @@ public struct VideoCodecSettings: Codable, Sendable {
                     dataRateLimits == rhs.dataRateLimits &&
                     isLowLatencyRateControlEnabled == rhs.isLowLatencyRateControlEnabled &&
                     isHardwareAcceleratedEnabled == rhs.isHardwareAcceleratedEnabled &&
-                    defaultFrameRate == rhs.defaultFrameRate
+                    expectedFrameRate == rhs.expectedFrameRate
         )
     }
 

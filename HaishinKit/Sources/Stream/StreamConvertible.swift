@@ -29,6 +29,9 @@ public protocol StreamConvertible: Actor, MediaMixerOutput {
     /// Sets the video input buffer counts.
     func setVideoInputBufferCounts(_ videoInputBufferCounts: Int)
 
+    /// Sets the waiting for keyframe state. When true, non-keyframe video frames will be dropped.
+    func setWaitingForKeyframe(_ isWaiting: Bool)
+
     /// Appends a CMSampleBuffer.
     /// - Parameters:
     ///   - sampleBuffer:The sample buffer to append.
@@ -81,6 +84,10 @@ extension _Stream {
 
     public func setVideoInputBufferCounts(_ videoInputBufferCounts: Int) {
         outgoing.videoInputBufferCounts = videoInputBufferCounts
+    }
+
+    public func setWaitingForKeyframe(_ isWaiting: Bool) {
+        outgoing.isWaitingForKeyframe = isWaiting
     }
 
     public func setSoundTransform(_ soundTransform: SoundTransform) async {

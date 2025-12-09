@@ -65,6 +65,9 @@ package final class OutgoingStream {
         }
     }
 
+    /// Whether new video frames should be dropped (waiting for keyframe).
+    package var isWaitingForKeyframe = false
+
     /// Create a new instance.
     package init() {
     }

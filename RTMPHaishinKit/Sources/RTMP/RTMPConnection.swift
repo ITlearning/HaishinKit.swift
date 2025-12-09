@@ -499,7 +499,7 @@ public actor RTMPConnection: HaishinKit.NetworkConnection {
 
     private func dispatch(_ event: NetworkMonitorEvent) {
         switch event {
-        case .status(let report), .publishInsufficientBWOccured(let report):
+        case .status(let report), .publishInsufficientBWOccured(let report), .bufferDelayExceeded(let report, _):
             if windowSizeS * (sequence + 1) <= report.totalBytesIn {
                 doOutput(sequence == 0 ? .zero : .one, chunkStreamId: .control, message: RTMPAcknowledgementMessage(sequence: UInt32(report.totalBytesIn)))
                 sequence += 1

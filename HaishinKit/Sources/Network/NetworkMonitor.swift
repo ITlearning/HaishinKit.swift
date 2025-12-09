@@ -34,6 +34,9 @@ package final actor NetworkMonitor {
     }
     private weak var reporter: (any NetworkTransportReporter)?
 
+    /// The threshold in seconds for buffer delay detection. Default is 30 seconds.
+    package var bufferDelayThreshold: Double = 30.0
+
     /// Creates a new instance.
     package init(_ reporter: some NetworkTransportReporter) {
         self.reporter = reporter
@@ -58,6 +61,16 @@ package final actor NetworkMonitor {
             currentBytesInPerSecond: currentBytesInPerSecond,
             currentBytesOutPerSecond: currentBytesOutPerSecond
         )
+
+        // Check for buffer delay threshold
+        if currentBytesOutPerSecond > 0 && queueBytesOut > 0 {
+            let estimatedDelaySeconds = Double(queueBytesOut) / Double(currentBytesOutPerSecond)
+            if estimatedDelaySeconds >= bufferDelayThreshold {
+                logger.info("[NetworkMonitor] Buffer delay threshold exceeded: \(estimatedDelaySeconds)s >= \(bufferDelayThreshold)s, queueBytesOut=\(queueBytesOut), bytesOutPerSecond=\(currentBytesOutPerSecond)")
+                return .bufferDelayExceeded(report: eventReport, estimatedDelaySeconds: estimatedDelaySeconds)
+            }
+        }
+
         if measureInterval <= previousQueueBytesOut.count {
             defer {
                 previousQueueBytesOut.removeFirst()

@@ -727,6 +727,24 @@ extension RTMPStream: _Stream {
         switch sampleBuffer.formatDescription?.mediaType {
         case .video:
             if sampleBuffer.formatDescription?.isCompressed == true {
+                let isKeyframe = !sampleBuffer.isNotSync
+
+                // Check if we're waiting for keyframe (buffer drop strategy)
+                if outgoing.isWaitingForKeyframe {
+                    if isKeyframe {
+                        // Keyframe received - notify strategy and resume sending
+                        logger.info("[NetworkMonitor] Keyframe detected, resuming frame transmission")
+                        if let bufferDropStrategy = bitRateStrategy as? StreamBufferDropBitRateStrategy {
+                            Task {
+                                await bufferDropStrategy.notifyKeyframeReceived()
+                            }
+                        }
+                    } else {
+                        // Drop non-keyframe while waiting
+                        return
+                    }
+                }
+
                 do {
                     let decodeTimeStamp = sampleBuffer.decodeTimeStamp.isValid ? sampleBuffer.decodeTimeStamp : sampleBuffer.presentationTimeStamp
                     let timedelta = try videoTimestamp.update(decodeTimeStamp)

@@ -8,4 +8,6 @@ public enum NetworkMonitorEvent: Sendable {
     case publishInsufficientBWOccured(report: NetworkMonitorReport)
     /// To reset  statistics.
     case reset
+    /// Buffer delay threshold exceeded - indicates buffer should be cleared.
+    case bufferDelayExceeded(report: NetworkMonitorReport, estimatedDelaySeconds: Double)
 }

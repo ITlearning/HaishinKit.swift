@@ -160,6 +160,23 @@ extension SRTStream: _Stream {
         switch sampleBuffer.formatDescription?.mediaType {
         case .video:
             if sampleBuffer.formatDescription?.isCompressed == true {
+                let isKeyframe = !sampleBuffer.isNotSync
+
+                // Check if we're waiting for keyframe (buffer drop strategy)
+                if outgoing.isWaitingForKeyframe {
+                    if isKeyframe {
+                        // Keyframe received - notify strategy and resume sending
+                        if let bufferDropStrategy = bitRateStrategy as? StreamBufferDropBitRateStrategy {
+                            Task {
+                                await bufferDropStrategy.notifyKeyframeReceived()
+                            }
+                        }
+                    } else {
+                        // Drop non-keyframe while waiting
+                        return
+                    }
+                }
+
                 writer.videoFormat = sampleBuffer.formatDescription
                 writer.append(sampleBuffer)
             } else {
