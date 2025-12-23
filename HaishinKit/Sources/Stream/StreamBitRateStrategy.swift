@@ -35,7 +35,9 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
             }
             if Self.statusCountsThreshold <= sufficientBWCounts {
                 let incremental = mamimumVideoBitRate / 10
-                videoSettings.bitRate = min(videoSettings.bitRate + incremental, mamimumVideoBitRate)
+                let temp = min(videoSettings.bitRate + incremental, mamimumVideoBitRate)
+                videoSettings.bitRate = temp
+                print("[복구 된 후 🔄] 비트레이트 조정 ---------> \(temp)")
                 try? await stream.setVideoSettings(videoSettings)
                 sufficientBWCounts = 0
             } else {
@@ -47,10 +49,17 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
             let audioSettings = await stream.audioSettings
             if 0 < report.currentBytesOutPerSecond {
                 let bitRate = Int(report.currentBytesOutPerSecond * 8) / (zeroBytesOutPerSecondCounts + 1)
-                videoSettings.bitRate = max(bitRate - audioSettings.bitRate, mamimumVideoBitRate / 10)
-                videoSettings.frameInterval = 0.0
+                let estimated = bitRate - audioSettings.bitRate
+                let temp = min(
+                    max(estimated, mamimumVideoBitRate / 10),
+                    mamimumVideoBitRate
+                )
+                print("[❌ 대역폭 부족!!] 비트레이트 조정 ---------> \(temp)")
+                videoSettings.bitRate = temp
+                videoSettings.frameInterval = VideoCodecSettings.frameInterval30
                 sufficientBWCounts = 0
                 zeroBytesOutPerSecondCounts = 0
+                try? await stream.setVideoSettings(videoSettings)
             } else {
                 switch zeroBytesOutPerSecondCounts {
                 case 2:
