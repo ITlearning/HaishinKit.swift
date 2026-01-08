@@ -15,11 +15,15 @@ public protocol StreamBitRateStrategy: Sendable {
 public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
     /// The status counts threshold for restoring the status
     public static let statusCountsThreshold: Int = 15
-    public static let stableCountsThreshold: Int = 5 // 원래 : 180초 | 테스트용 : 30초
+
+    /// 안정 카운트 임계값 (고정)
+    private let stableCountsThreshold: Int = 30
+
     private var stableCounts: Int = 0
     
     public let mamimumVideoBitRate: Int
     public var effectiveMaxBitRate: Int
+    /// 최소 비트레이트: 최대의 25% (Larix 스타일)
     public let minVideoBitRate: Int
     public let mamimumAudioBitRate: Int = 0
     private var sufficientBWCounts: Int = 0
@@ -33,15 +37,12 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
     private var lastQueueBytesOut: Int = 0
     private var queueIncreasingCount: Int = 0 // 연속으로 큐가 증가한 횟수
 
+    // Larix 스타일 복구 단위: 500Kbps 고정
+    private let recoveryIncrementBitRate: Int = 500_000 // 500Kbps
+
     private var initialVideoSize: CGSize?
     private var currentVideoSize: Resolution = .p1080
-    private var currentFrameRate: FrameRate = .fps30
 
-    /// 해상도 조절 임계 비트레이트 (기본 1000kbps = 1,000,000bps)
-    public let resolutionThresholdBitRate: Int
-
-    /// 비트레이트 저하 후 프레임레이트 조절까지 대기 시간 (초)
-    private let frameRateAdjustDelay: Int = 2
     /// 비트레이트 저하 후 경과 시간 추적
     private var degradationWaitCounts: Int = 0
     /// 비트레이트만 조절한 상태인지 추적
@@ -51,11 +52,11 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
     /// - Parameters:
     ///   - mamimumVideoBitrate: 최대 비디오 비트레이트
     ///   - resolutionThresholdBitRate: 해상도 조절 임계 비트레이트 (기본 1,000,000 = 1000kbps)
-    public init(mamimumVideoBitrate: Int, resolutionThresholdBitRate: Int = 1_000_000) {
+    public init(mamimumVideoBitrate: Int) {
         self.mamimumVideoBitRate = mamimumVideoBitrate
         self.effectiveMaxBitRate = mamimumVideoBitrate
-        self.minVideoBitRate = 100_000
-        self.resolutionThresholdBitRate = resolutionThresholdBitRate
+        // Larix 스타일: 최소 비트레이트는 최대의 25%
+        self.minVideoBitRate = max(mamimumVideoBitrate / 8, 500000)
     }
     
     
@@ -105,53 +106,6 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
         }
     }
 
-    enum FrameRate {
-        case fps30
-        case fps24
-        case fps15
-
-        /// frameInterval 값 (1/fps - 0.001)
-        var frameInterval: Double {
-            switch self {
-            case .fps30: return (1.0 / 30.0) - 0.001
-            case .fps24: return (1.0 / 24.0) - 0.001
-            case .fps15: return (1.0 / 15.0) - 0.001
-            }
-        }
-
-        var fps: Int {
-            switch self {
-            case .fps30: return 30
-            case .fps24: return 24
-            case .fps15: return 15
-            }
-        }
-
-        func rateUp() -> Self {
-            switch self {
-            case .fps30: return self
-            case .fps24: return .fps30
-            case .fps15: return .fps24
-            }
-        }
-
-        func rateDown() -> Self {
-            switch self {
-            case .fps30: return .fps24
-            case .fps24: return .fps15
-            case .fps15: return self
-            }
-        }
-
-        var isLowest: Bool {
-            return self == .fps15
-        }
-
-        var isHighest: Bool {
-            return self == .fps30
-        }
-    }
-    
     func resolutionSetting(_ control: ControlResolution) {
         let temp = currentVideoSize
 
@@ -163,20 +117,7 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
             let sizeDown = currentVideoSize.sizeDown()
             currentVideoSize = sizeDown
         }
-        print("[TABBER] 📺 해상도 \(control == .up ? "UP" : "DOWN" ) : 기존 \(temp.size) --> 변경 \(currentVideoSize.size)")
-    }
-
-    func frameRateSetting(_ control: ControlResolution) {
-        let temp = currentFrameRate
-
-        switch control {
-        case .up:
-            currentFrameRate = currentFrameRate.rateUp()
-        case .down:
-            currentFrameRate = currentFrameRate.rateDown()
-        }
-
-        print("[TABBER] 🎬 프레임레이트 \(control == .up ? "UP" : "DOWN") : 기존 \(temp.fps)fps --> 변경 \(currentFrameRate.fps)fps")
+        print("[SL LOG] 📺 해상도 \(control == .up ? "UP" : "DOWN" ) : 기존 \(temp.size) --> 변경 \(currentVideoSize.size)")
     }
 
     private func updateEmaVideoBytesPerSecond(currentBytesOutPerSecond: Int, audioBitRate: Int) {
@@ -213,54 +154,30 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
         }
     }
 
-    /// 단계적 품질 저하 - 비트레이트 → 해상도 순서
-    func degradeQuality(currentBitRate: Int, videoSettings: inout VideoCodecSettings) -> Bool {
-        let needsUpdate = false
-
-        // 1단계: 비트레이트가 이미 낮아진 상태인지 확인
+    /// 비트레이트 저하 상태 기록
+    /// - Returns: 항상 false (비트레이트만 조절, 해상도/프레임레이트는 조절하지 않음)
+    func degradeQuality(currentBitRate: Int, queueDuration: Double, videoSettings: inout VideoCodecSettings) -> Bool {
+        // 비트레이트가 이미 낮아진 상태인지 확인
         if !isBitRateDegraded {
             isBitRateDegraded = true
             degradationWaitCounts = 0
-            print("[TABBER][1단계] 비트레이트 저하 시작")
+            print("[SL LOG] 비트레이트 저하 시작")
         }
 
         // 대기 시간 증가
         degradationWaitCounts += 1
-        
-        // 2단계: 해상도 조절
-//        if currentBitRate <= resolutionThresholdBitRate && !currentVideoSize.isLowest {
-//            resolutionSetting(.down)
-//            videoSettings.videoSize = currentVideoSize.size
-//            needsUpdate = true
-//            print("[TABBER][2단계] 해상도 조절: \(currentVideoSize.size)")
-//        }
 
-        return needsUpdate
+        // 해상도/프레임레이트는 조절하지 않음 - 비트레이트만 조절
+        return false
     }
 
-    /// 단계적 품질 복구 - 해상도 → 프레임레이트 → 비트레이트 순서 (저하의 역순)
-    /// - Returns: (needsUpdate, recoveryType) - 업데이트 필요 여부와 복구 타입
+    /// 품질 복구 상태 리셋
+    /// - Returns: 항상 (false, "") - 비트레이트 복구는 기존 로직에서 처리
     func recoverQuality(videoSettings: inout VideoCodecSettings) -> (needsUpdate: Bool, recoveryType: String) {
-        // 1단계: 해상도 복구 (가장 먼저)
-//        if !currentVideoSize.isHighest {
-//            resolutionSetting(.up)
-//            videoSettings.videoSize = currentVideoSize.size
-//            return (true, "해상도")
-//        }
-
-        // 2단계: 프레임레이트 복구
-        if !currentFrameRate.isHighest {
-            frameRateSetting(.up)
-            videoSettings.frameInterval = currentFrameRate.frameInterval
-            return (true, "프레임레이트")
-        }
-
-        // 3단계: 비트레이트 복구 (이미 기존 로직에서 처리)
-        // 모든 품질이 복구되면 저하 상태 리셋
-        if currentVideoSize.isHighest {
-            isBitRateDegraded = false
-            degradationWaitCounts = 0
-        }
+        // 비트레이트 복구는 기존 로직에서 처리
+        // 저하 상태 리셋
+        isBitRateDegraded = false
+        degradationWaitCounts = 0
 
         return (false, "")
     }
@@ -306,20 +223,20 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
                 lastQueueBytesOut = report.currentQueueBytesOut
 
                 // 연속 2회 이상 큐가 증가하면 비트레이트를 추가 감산
-                if queueIncreasingCount >= 2 {
-                    let additionalReductionRatio = 0.10 // 10% 추가 감산
+                if queueIncreasingCount >= 1 {
+                    let additionalReductionRatio = 0.15 // 15% 추가 감산
                     let newBitRate = Int(Double(videoSettings.bitRate) * (1.0 - additionalReductionRatio))
                     let clampedBitRate = max(newBitRate, minVideoBitRate)
 
                     effectiveMaxBitRate = clampedBitRate
                     videoSettings.bitRate = clampedBitRate
 
-                    print("[TABBER][⏸️ 복구 보류 + 큐 증가 감지] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 연속 \(queueIncreasingCount)회 증가 → 비트레이트 10% 추가 감산: \(clampedBitRate)")
+                    print("[SL LOG][⏸️ 복구 보류 + 큐 증가 감지] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 연속 \(queueIncreasingCount)회 증가 → 비트레이트 10% 추가 감산: \(clampedBitRate)")
 
                     queueIncreasingCount = 0 // 감산 후 리셋
                     try? await stream.setVideoSettings(videoSettings)
                 } else {
-                    print("[TABBER][⏸️ 복구 보류] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 큐가 아직 많아서 복구 대기")
+                    print("[SL LOG][⏸️ 복구 보류] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 큐가 아직 많아서 복구 대기")
                 }
                 return
             }
@@ -331,14 +248,14 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
             let maxRecoveryBitRate = Int(Double(effectiveMaxBitRate) * 0.9) // 상한의 90%
             
             if videoSettings.bitRate < maxRecoveryBitRate {
-                // 아직 90% 미만이면: 비트레이트를 10%씩 복구
+                // 아직 90% 미만이면: Larix 스타일 500Kbps 단위로 복구
                 stableCounts = 0  // 아직 완전 안정 상태는 아님
                 
-                let incremental = effectiveMaxBitRate / 10
-                let temp = min(videoSettings.bitRate + incremental, maxRecoveryBitRate)
+                // Larix 스타일: 500Kbps 고정 단위로 복구
+                let temp = min(videoSettings.bitRate + recoveryIncrementBitRate, maxRecoveryBitRate)
                 videoSettings.bitRate = temp
                 
-                print("[TABBER][복구 🔄] 비트레이트 조정 ---------> \(temp) (상한의 90%: \(maxRecoveryBitRate)) | 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s)")
+                print("[SL LOG][복구 🔄] 비트레이트 +500Kbps ---------> \(temp / 1000)Kbps (상한의 90%: \(maxRecoveryBitRate / 1000)Kbps) | 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s)")
                 sufficientBWCounts = 0
                 
                 try? await stream.setVideoSettings(videoSettings)
@@ -347,22 +264,23 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
                 sufficientBWCounts = 0
                 stableCounts += 1
 
-                // N초 이상 안정 + 아직 최종 목표치보다 낮으면 상한 10% 올리기
-                if stableCounts >= Self.stableCountsThreshold && effectiveMaxBitRate < mamimumVideoBitRate {
-                    let newMax = min(Int(Double(effectiveMaxBitRate) * 1.1), mamimumVideoBitRate)
+                // N초 이상 안정 + 아직 최종 목표치보다 낮으면 상한 올리기 (Larix 스타일: 500Kbps 단위)
+                if stableCounts >= stableCountsThreshold && effectiveMaxBitRate < mamimumVideoBitRate {
+                    // Larix 스타일: 500Kbps 단위로 상한 올리기
+                    let newMax = min(effectiveMaxBitRate + recoveryIncrementBitRate, mamimumVideoBitRate)
                     effectiveMaxBitRate = newMax
                     stableCounts = 0
 
-                    print("[TABBER][📈 \(Self.stableCountsThreshold)초 안정 → 목표 상향] effectiveMaxBitRate ---------> \(effectiveMaxBitRate) | 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s)")
+                    print("[SL LOG][📈 \(stableCountsThreshold)초 안정 → 목표 +500Kbps] effectiveMaxBitRate ---------> \(effectiveMaxBitRate / 1000)Kbps | 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s)")
 
-                    // 단계적 품질 복구 (해상도 → 프레임레이트 순서)
+                    // 단계적 품질 복구 (해상도)
                     let (needsUpdate, recoveryType) = recoverQuality(videoSettings: &videoSettings)
                     if needsUpdate {
-                        print("[TABBER][복구 🔄] \(recoveryType) 복구 완료")
+                        print("[SL LOG][복구 🔄] \(recoveryType) 복구 완료")
                         do {
                             try await stream.setVideoSettings(videoSettings)
                         } catch {
-                            print("[TABBER] \(recoveryType) 복구 적용 실패 \(error.localizedDescription)")
+                            print("[SL LOG] \(recoveryType) 복구 적용 실패 \(error.localizedDescription)")
                         }
                     }
                 }
@@ -374,8 +292,6 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
             let currentBitRate = videoSettings.bitRate
             
             if 0 < report.currentBytesOutPerSecond {
-                let bitRate = Int(report.currentBytesOutPerSecond * 8) / (zeroBytesOutPerSecondCounts + 1)
-                let estimated = bitRate - audioSettings.bitRate
                 let currentBandwidth = Int(report.currentBytesOutPerSecond * 8)
                 let bandwidthRatio = Double(currentBandwidth) / Double(currentBitRate)
 
@@ -391,7 +307,7 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
                 
                 if bandwidthRatio >= 0.8 && !queueTooLarge {
                     // 실제 대역폭 충분 + 큐도 적당함 → 무시
-                    print("[TABBER][⚠️ 일시적 큐 증가] 실제 대역폭 충분 (\(Int(bandwidthRatio * 100))%), 큐 적정 → 조정 안함")
+                    print("[SL LOG][⚠️ 일시적 큐 증가] 실제 대역폭 충분 (\(Int(bandwidthRatio * 100))%), 큐 적정 → 조정 안함")
                     return
                 }
                 
@@ -399,51 +315,44 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
                 let stableThresholdForGradualReduction: Int = 3
                 let isStableState = stableCounts >= stableThresholdForGradualReduction
                 
-                // estimated가 현재 effectiveMaxBitRate보다 높으면 무시 (큐가 쌓여있는 상황에서 비트레이트가 올라가는 것 방지)
-                let clampedEstimated = min(estimated, effectiveMaxBitRate)
-
                 if isStableState {
-                    // 안정 상태: 고정 15% 감소 (기존 로직)
+                    // 안정 상태: 고정 15% 감소
                     let reductionRatio = 0.15
                     let newBitRate = Int(Double(currentBitRate) * (1.0 - reductionRatio))
-                    let newMax = max(newBitRate, minVideoBitRate)
-                    
-                    // 감산된 값과 clampedEstimated 중 작은 값을 선택 (더 보수적으로)
-                    effectiveMaxBitRate = min(newMax, clampedEstimated > 0 ? max(clampedEstimated, minVideoBitRate) : newMax)
+                    effectiveMaxBitRate = max(newBitRate, minVideoBitRate)
                     let temp = Int(Double(effectiveMaxBitRate) * 0.9)
                     
                     if queueTooLarge {
-                        print("[TABBER][⚠️ 안정 상태 → 점진적 감소] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 조정: \(temp) | effectiveMaxBitRate: \(effectiveMaxBitRate)")
+                        print("[SL LOG][⚠️ 안정 상태 → 점진적 감소] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 조정: \(temp / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
                     } else {
-                        print("[TABBER][⚠️ 안정 상태 → 점진적 감소] 실제 대역폭: \(Int(bandwidthRatio * 100))% / 큐: \(String(format: "%.2f", queueDuration))s → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 조정: \(temp) | effectiveMaxBitRate: \(effectiveMaxBitRate)")
+                        print("[SL LOG][⚠️ 안정 상태 → 점진적 감소] 실제 대역폭: \(Int(bandwidthRatio * 100))% / 큐: \(String(format: "%.2f", queueDuration))s → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 조정: \(temp / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
                     }
                     
                     // 안정 상태에서는 stableCounts를 완전히 리셋하지 않고 감소시킴
                     stableCounts = max(0, stableCounts - 10)
+
                 } else {
-                    // 비안정 상태: 큐 duration 기반 동적 감소
+                    // 비안정 상태: 큐 duration 기반 동적 감소 (순수 감산율만 적용)
                     let reductionRatio = dynamicReductionRatio(queueBytes: report.currentQueueBytesOut, fallbackBitRate: currentBitRate)
                     let newBitRate = Int(Double(currentBitRate) * (1.0 - reductionRatio))
-                    
-                    // 감산된 값과 clampedEstimated 중 작은 값을 선택 (더 보수적으로)
-                    let candidate = max(newBitRate, minVideoBitRate)
-                    effectiveMaxBitRate = min(candidate, clampedEstimated > 0 ? max(clampedEstimated, minVideoBitRate) : candidate)
+                    effectiveMaxBitRate = max(newBitRate, minVideoBitRate)
                     let temp = Int(Double(effectiveMaxBitRate) * 0.9)
                     
                     if queueTooLarge {
-                        print("[TABBER][❌ 큐 과다!!] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 조정: \(temp) | effectiveMaxBitRate: \(effectiveMaxBitRate)")
+                        print("[SL LOG][❌ 큐 과다!!] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 조정: \(temp / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
                     } else {
-                        print("[TABBER][❌ 대역폭 부족!!] 실제 대역폭: \(Int(bandwidthRatio * 100))% / 큐: \(String(format: "%.2f", queueDuration))s → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 조정: \(temp) | effectiveMaxBitRate: \(effectiveMaxBitRate)")
+                        print("[SL LOG][❌ 대역폭 부족!!] 실제 대역폭: \(Int(bandwidthRatio * 100))% / 큐: \(String(format: "%.2f", queueDuration))s → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 조정: \(temp / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
                     }
                     
                     // 비안정 상태에서는 stableCounts를 완전히 리셋
                     stableCounts = 0
+
                 }
                 
                 videoSettings.bitRate = Int(Double(effectiveMaxBitRate) * 0.9)
 
-                // 단계적 품질 저하 적용 (비트레이트 → 해상도)
-                _ = degradeQuality(currentBitRate: videoSettings.bitRate, videoSettings: &videoSettings)
+                // 단계적 품질 저하 적용 (비트레이트 → 프레임레이트 → 해상도)
+                _ = degradeQuality(currentBitRate: videoSettings.bitRate, queueDuration: queueDuration, videoSettings: &videoSettings)
 
                 sufficientBWCounts = 0
                 zeroBytesOutPerSecondCounts = 0
@@ -459,7 +368,6 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
             videoSettings.bitRate = mamimumVideoBitRate
             // 상태 초기화
             currentVideoSize = .p1080
-            currentFrameRate = .fps30
             isBitRateDegraded = false
             degradationWaitCounts = 0
             stableCounts = 0
