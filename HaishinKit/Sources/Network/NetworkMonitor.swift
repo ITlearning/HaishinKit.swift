@@ -70,6 +70,8 @@ package final actor NetworkMonitor {
                 return .publishInsufficientBWOccured(report: eventReport)
             } else if total == 0 {
                 return .status(report: eventReport)
+            } else {
+                return .status(report: eventReport)
             }
         }
         return .status(report: eventReport)
@@ -84,15 +86,15 @@ extension NetworkMonitor: AsyncRunner {
         }
         isRunning = true
         timer = Task {
-            let timer = AsyncStream {
+            while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
-            }
-            for await _ in timer {
+                
                 do {
                     let event = try await collect()
                     continuation?.yield(event)
                 } catch {
                     continuation?.finish()
+                    break
                 }
             }
         }

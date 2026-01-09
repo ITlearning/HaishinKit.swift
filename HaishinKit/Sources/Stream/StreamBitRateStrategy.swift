@@ -2,9 +2,9 @@ import Foundation
 
 /// A type with a network bitrate strategy representation.
 public protocol StreamBitRateStrategy: Sendable {
-    /// The mamimum video bitRate.
+    /// The maximum video bitRate.
     var mamimumVideoBitRate: Int { get }
-    /// The mamimum audio bitRate.
+    /// The maximum audio bitRate.
     var mamimumAudioBitRate: Int { get }
 
     /// Adjust a bitRate.
@@ -22,15 +22,9 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
     /// 비트레이트 감소율
     private let stableStateReductionRatio: Double = 0.15  // 안정 상태: 15% 감소
     private let additionalReductionRatio: Double = 0.15   // 큐 증가 감지 시 추가 감산: 15%
-
     private var stableCounts: Int = 0
-    
-    public let mamimumVideoBitRate: Int
-    public var effectiveMaxBitRate: Int
-    /// 최소 비트레이트: 최대의 25% (Larix 스타일)
-    public let minVideoBitRate: Int
-    public let mamimumAudioBitRate: Int = 0
-    private var sufficientBWCounts: Int = 0
+
+    private var sufficientBandwidthCounts: Int = 0
     private var zeroBytesOutPerSecondCounts: Int = 0
 
     // 비디오 전용 전송 속도 EMA (bytes/sec)
@@ -44,166 +38,44 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
     // Larix 스타일 복구 단위: 500Kbps 고정
     private let recoveryIncrementBitRate: Int = 500_000 // 500Kbps
 
-    private var initialVideoSize: CGSize?
-    private var currentVideoSize: Resolution = .p1080
-
-    /// 비트레이트 저하 후 경과 시간 추적
-    private var degradationWaitCounts: Int = 0
-    /// 비트레이트만 조절한 상태인지 추적
-    private var isBitRateDegraded: Bool = false
-
-    /// Creates a new instance.
-    /// - Parameters:
-    ///   - mamimumVideoBitrate: 최대 비디오 비트레이트
-    public init(mamimumVideoBitrate: Int) {
-        self.mamimumVideoBitRate = mamimumVideoBitrate
-        self.effectiveMaxBitRate = mamimumVideoBitrate
-        // 최소 비트레이트는 최대의 15%, 단 500kbps 이상 보장
-        self.minVideoBitRate = max(Int(Double(mamimumVideoBitrate) * 0.15), 500_000)
-    }
-    
-    
-    enum ControlResolution {
-        case up
-        case down
-    }
-    
-    enum Resolution {
-        case p1080
-        case p720
-        case p540
-
-        var size: CGSize {
-            switch self {
-            case .p1080:
-                return .init(width: 1080, height: 1920)
-            case .p720:
-                return .init(width: 720, height: 1280)
-            case .p540:
-                return .init(width: 540, height: 960)
-            }
-        }
-
-        func sizeUp() -> Self {
-            switch self {
-            case .p1080: return self
-            case .p720: return .p1080
-            case .p540: return .p720
-            }
-        }
-
-        func sizeDown() -> Self {
-            switch self {
-            case .p1080: return .p720
-            case .p720: return .p540
-            case .p540: return self
-            }
-        }
-
-        var isLowest: Bool {
-            return self == .p540
-        }
-
-        var isHighest: Bool {
-            return self == .p1080
-        }
-    }
-
-    func resolutionSetting(_ control: ControlResolution) {
-        let temp = currentVideoSize
-
-        switch control {
-        case .up:
-            let sizeUp = currentVideoSize.sizeUp()
-            currentVideoSize = sizeUp
-        case .down:
-            let sizeDown = currentVideoSize.sizeDown()
-            currentVideoSize = sizeDown
-        }
-        print("[SL LOG] 📺 해상도 \(control == .up ? "UP" : "DOWN" ) : 기존 \(temp.size) --> 변경 \(currentVideoSize.size)")
-    }
-
-    private func updateEmaVideoBytesPerSecond(currentBytesOutPerSecond: Int, audioBitRate: Int) {
-        let audioBytesPerSecond = max(audioBitRate / 8, 0)
-        let rawVideoBytesPerSecond = max(currentBytesOutPerSecond - audioBytesPerSecond, 0)
-        let current = Double(rawVideoBytesPerSecond)
-
-        if emaVideoBytesPerSecond <= 0 {
-            emaVideoBytesPerSecond = current
-        } else {
-            emaVideoBytesPerSecond = emaAlpha * current + (1.0 - emaAlpha) * emaVideoBytesPerSecond
-        }
-    }
-
-    private func queueDurationSeconds(queueBytes: Int, fallbackBitRate: Int) -> Double {
-        if emaVideoBytesPerSecond > 0 {
-            // EMA 기반 비디오 전송 속도로 큐 지연 추정
-            return Double(queueBytes) / emaVideoBytesPerSecond
-        }
-        // EMA 초기화 전에는 기존 비트레이트 기반 근사값 사용
-        guard fallbackBitRate > 0 else { return .infinity }
-        return Double(queueBytes * 8) / Double(fallbackBitRate)
-    }
-
-    private func dynamicReductionRatio(queueBytes: Int, fallbackBitRate: Int) -> Double {
-        let duration = queueDurationSeconds(queueBytes: queueBytes, fallbackBitRate: fallbackBitRate)
-        switch duration {
-        case ..<0.1: return 0.10   // 100ms 미만: 가벼운 감소
-        case ..<0.2: return 0.15   // 100~200ms: 기존 수준
-        case ..<0.5: return 0.25   // 200~500ms: 중간 감소
-        case ..<1.0: return 0.35   // 0.5~1s: 더 큰 감소
-        case ..<2.0: return 0.50   // 1~2s: 크게 감소
-        default:     return 0.70   // 2s 이상: 최대폭 감소
-        }
-    }
-
-    /// 비트레이트 저하 상태 기록
-    /// - Returns: 항상 false (비트레이트만 조절, 해상도/프레임레이트는 조절하지 않음)
-    func degradeQuality(currentBitRate: Int, queueDuration: Double, videoSettings: inout VideoCodecSettings) -> Bool {
-        // 비트레이트가 이미 낮아진 상태인지 확인
-        if !isBitRateDegraded {
-            isBitRateDegraded = true
-            degradationWaitCounts = 0
-            print("[SL LOG] 비트레이트 저하 시작")
-        }
-
-        // 대기 시간 증가
-        degradationWaitCounts += 1
-
-        // 해상도/프레임레이트는 조절하지 않음 - 비트레이트만 조절
-        return false
-    }
-
-    /// 품질 복구 상태 리셋
-    /// - Returns: 항상 (false, "") - 비트레이트 복구는 기존 로직에서 처리
-    func recoverQuality(videoSettings: inout VideoCodecSettings) -> (needsUpdate: Bool, recoveryType: String) {
-        // 비트레이트 복구는 기존 로직에서 처리
-        // 저하 상태 리셋
-        isBitRateDegraded = false
-        degradationWaitCounts = 0
-
-        return (false, "")
-    }
-
     /// 복구 허용 큐 duration 임계값 (이 값 이하일 때만 복구 진행)
-    private let recoveryAllowedQueueDurationThreshold: Double = 0.5 // 0.5초
+    private let recoveryAllowedQueueDurationThreshold: Double = 1.0 // 1초
     /// 복구 허용 큐 바이트 임계값 (이 값 이하일 때만 복구 진행)
-    private let recoveryAllowedQueueBytesThreshold: Int = 100_000 // 100KB
+    private let recoveryAllowedQueueBytesThreshold: Int = 200_000 // 200KB
+
+    /// 대역폭 부족 감지 시 큐 과다 판정 임계값 (복구 허용 임계값보다 높음)
+    private let congestionQueueBytesThreshold: Int = 300_000  // 300KB
+
+    /// 단기 안정 상태 감지 임계값 (3초 이상 안정적이면 점진적 감소 적용)
+    private let shortTermStableCountsThreshold: Int = 3
 
     /// effectiveMaxBitRate의 90%를 계산 (복구 목표 비트레이트)
     private func calculateRecoveryTargetBitRate() -> Int {
         return Int(Double(effectiveMaxBitRate) * 0.9)
     }
-
+    
+    // MARK: public property
+    public let mamimumVideoBitRate: Int
+    public var effectiveMaxBitRate: Int
+    /// 최소 비트레이트: 최대의 15%
+    public let minVideoBitRate: Int
+    public let mamimumAudioBitRate: Int = 0
+    
+    /// Creates a new instance.
+    /// - Parameters:
+    ///   - maximumVideoBitrate: 최대 비디오 비트레이트
+    public init(mamimumVideoBitRate: Int) {
+        self.mamimumVideoBitRate = mamimumVideoBitRate
+        self.effectiveMaxBitRate = mamimumVideoBitRate
+        // 최소 비트레이트는 최대의 15%, 단 500kbps 이상 보장
+        self.minVideoBitRate = max(Int(Double(mamimumVideoBitRate) * 0.15), 500_000)
+    }
+    
     public func adjustBitrate(_ event: NetworkMonitorEvent, stream: some StreamConvertible) async {
         switch event {
         case .status(let report):
             var videoSettings = await stream.videoSettings
             let audioSettings = await stream.audioSettings
-            
-            if initialVideoSize == nil {
-                initialVideoSize = videoSettings.videoSize
-            }
 
             // .status에서도 EMA 업데이트 (네트워크가 좋아질 때 EMA가 올라가도록)
             if report.currentBytesOutPerSecond > 0 {
@@ -238,7 +110,7 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
                     effectiveMaxBitRate = clampedBitRate
                     videoSettings.bitRate = clampedBitRate
 
-                    print("[SL LOG][⏸️ 복구 보류 + 큐 증가 감지] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 연속 \(queueIncreasingCount)회 증가 → 비트레이트 10% 감산: \(clampedBitRate / 1000)Kbps")
+                    print("[SL LOG][⏸️ 복구 보류 + 큐 증가 감지] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 연속 \(queueIncreasingCount)회 증가 → 비트레이트 \(additionalReductionRatio)% 감산: \(clampedBitRate / 1000)Kbps")
 
                     queueIncreasingCount = 0 // 감산 후 리셋
                     try? await stream.setVideoSettings(videoSettings)
@@ -263,12 +135,12 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
                 videoSettings.bitRate = temp
                 
                 print("[SL LOG][복구 🔄] 비트레이트 +500Kbps ---------> \(temp / 1000)Kbps (상한의 90%: \(maxRecoveryBitRate / 1000)Kbps) | 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s)")
-                sufficientBWCounts = 0
+                sufficientBandwidthCounts = 0
                 
                 try? await stream.setVideoSettings(videoSettings)
             } else {
                 // 이미 상한의 90% 근처에서 안정적으로 보내는 구간
-                sufficientBWCounts = 0
+                sufficientBandwidthCounts = 0
                 stableCounts += 1
 
                 // 30초 이상 안정 + 아직 최종 목표치보다 낮으면 상한 올리기 (Larix 스타일: 500Kbps 단위)
@@ -279,92 +151,75 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
                     stableCounts = 0
 
                     print("[SL LOG][📈 \(longTermStableCountsThreshold)초 안정 → 목표 +500Kbps] effectiveMaxBitRate ---------> \(effectiveMaxBitRate / 1000)Kbps | 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s)")
-
-                    // 단계적 품질 복구 (해상도)
-                    let (needsUpdate, recoveryType) = recoverQuality(videoSettings: &videoSettings)
-                    if needsUpdate {
-                        print("[SL LOG][복구 🔄] \(recoveryType) 복구 완료")
-                        do {
-                            try await stream.setVideoSettings(videoSettings)
-                        } catch {
-                            print("[SL LOG] \(recoveryType) 복구 적용 실패 \(error.localizedDescription)")
-                        }
-                    }
                 }
             }
         case .publishInsufficientBWOccured(let report):
-            sufficientBWCounts = 0
+            sufficientBandwidthCounts = 0
             var videoSettings = await stream.videoSettings
             let audioSettings = await stream.audioSettings
             let currentBitRate = videoSettings.bitRate
-            
-            if 0 < report.currentBytesOutPerSecond {
-                let currentBandwidth = Int(report.currentBytesOutPerSecond * 8)
-                let bandwidthRatio = Double(currentBandwidth) / Double(currentBitRate)
 
-                // 비디오 전용 전송 속도 EMA 업데이트
-                updateEmaVideoBytesPerSecond(
-                    currentBytesOutPerSecond: Int(report.currentBytesOutPerSecond),
-                    audioBitRate: audioSettings.bitRate
-                )
-                
-                /// 대역폭 부족 감지 시 큐 과다 판정 임계값 (복구 허용 임계값보다 높음)
-                let congestionQueueBytesThreshold: Int = 300_000  // 300KB
-                let queueTooLarge = report.currentQueueBytesOut > congestionQueueBytesThreshold
-                let queueDuration = queueDurationSeconds(queueBytes: report.currentQueueBytesOut, fallbackBitRate: currentBitRate)
-                
-                if bandwidthRatio >= 0.8 && !queueTooLarge {
-                    // 실제 대역폭 충분 + 큐도 적당함 → 무시
-                    print("[SL LOG][⚠️ 일시적 큐 증가] 실제 대역폭 충분 (\(Int(bandwidthRatio * 100))%), 큐 적정 → 조정 안함")
-                    return
-                }
-                
-                // 단기 안정 상태 감지 임계값 (3초 이상 안정적이면 점진적 감소 적용)
-                let shortTermStableCountsThreshold: Int = 3
-                let isStableState = stableCounts >= shortTermStableCountsThreshold
-                
-                if isStableState {
-                    // 안정 상태: 고정 15% 감소
-                    let newBitRate = Int(Double(currentBitRate) * (1.0 - stableStateReductionRatio))
-                    effectiveMaxBitRate = max(newBitRate, minVideoBitRate)
-                    let temp = calculateRecoveryTargetBitRate()
-                    
-                    if queueTooLarge {
-                        print("[SL LOG][⚠️ 안정 상태 → 점진적 감소] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 감산율: \(Int(stableStateReductionRatio * 100))% → 비트레이트 조정: \(temp / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
-                    } else {
-                        print("[SL LOG][⚠️ 안정 상태 → 점진적 감소] 실제 대역폭: \(Int(bandwidthRatio * 100))% / 큐: \(String(format: "%.2f", queueDuration))s → 감산율: \(Int(stableStateReductionRatio * 100))% → 비트레이트 조정: \(temp / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
-                    }
+            let queueDuration = queueDurationSeconds(
+                queueBytes: report.currentQueueBytesOut,
+                fallbackBitRate: currentBitRate
+            )
 
-                    // 안정 상태에서는 stableCounts를 완전히 리셋 (비트레이트 감소 발생 시)
-                    stableCounts = 0
-
-                } else {
-                    // 비안정 상태: 큐 duration 기반 동적 감소 (순수 감산율만 적용)
+            // currentBytesOutPerSecond가 0이면 (네트워크가 막힌 상태)
+            if report.currentBytesOutPerSecond == 0 {
+                // 큐가 쌓이고 있으면 비트레이트를 강제로 감소
+                if report.currentQueueBytesOut > congestionQueueBytesThreshold {
                     let reductionRatio = dynamicReductionRatio(queueBytes: report.currentQueueBytesOut, fallbackBitRate: currentBitRate)
                     let newBitRate = Int(Double(currentBitRate) * (1.0 - reductionRatio))
                     effectiveMaxBitRate = max(newBitRate, minVideoBitRate)
-                    let temp = calculateRecoveryTargetBitRate()
-                    
-                    if queueTooLarge {
-                        print("[SL LOG][❌ 큐 과다!!] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 조정: \(temp / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
-                    } else {
-                        print("[SL LOG][❌ 대역폭 부족!!] 실제 대역폭: \(Int(bandwidthRatio * 100))% / 큐: \(String(format: "%.2f", queueDuration))s → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 조정: \(temp / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
-                    }
-                    
-                    // 비안정 상태에서는 stableCounts를 완전히 리셋
+                    videoSettings.bitRate = calculateRecoveryTargetBitRate()
+
+                    print("[SL LOG][🚫 전송 중단 + 큐 과다] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 강제 감소: \(videoSettings.bitRate / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
+
                     stableCounts = 0
-
+                    sufficientBandwidthCounts = 0
+                    zeroBytesOutPerSecondCounts = 0
+                    try? await stream.setVideoSettings(videoSettings)
+                } else {
+                    print("[SL LOG][🚫 전송 중단] 큐: \(report.currentQueueBytesOut / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 대기 중")
                 }
-
-                videoSettings.bitRate = calculateRecoveryTargetBitRate()
-
-                // 단계적 품질 저하 적용 (비트레이트 → 프레임레이트 → 해상도)
-                _ = degradeQuality(currentBitRate: videoSettings.bitRate, queueDuration: queueDuration, videoSettings: &videoSettings)
-
-                sufficientBWCounts = 0
-                zeroBytesOutPerSecondCounts = 0
-                try? await stream.setVideoSettings(videoSettings)
+                return
             }
+
+            // 대역폭 비율 계산
+            let bandwidthRatio = calculateBandwidthRatio(
+                currentBytesOutPerSecond: report.currentBytesOutPerSecond,
+                currentBitRate: currentBitRate
+            )
+
+            // 비디오 전용 전송 속도 EMA 업데이트
+            updateEmaVideoBytesPerSecond(
+                currentBytesOutPerSecond: report.currentBytesOutPerSecond,
+                audioBitRate: audioSettings.bitRate
+            )
+
+            // 일시적 큐 증가인지 확인
+            if isTemporaryQueueIncrease(bandwidthRatio: bandwidthRatio, queueBytes: report.currentQueueBytesOut) {
+                print("[SL LOG][⚠️ 일시적 큐 증가] 실제 대역폭 충분 (\(Int(bandwidthRatio * 100))%), 큐 적정 → 조정 안함")
+                return
+            }
+
+            // 안정 상태 판단
+            let isStableState = stableCounts >= shortTermStableCountsThreshold
+
+            // 비트레이트 감소 적용
+            applyBitrateReduction(
+                currentBitRate: currentBitRate,
+                queueBytes: report.currentQueueBytesOut,
+                queueDuration: queueDuration,
+                isStable: isStableState,
+                bandwidthRatio: bandwidthRatio
+            )
+
+            videoSettings.bitRate = calculateRecoveryTargetBitRate()
+
+            sufficientBandwidthCounts = 0
+            zeroBytesOutPerSecondCounts = 0
+            try? await stream.setVideoSettings(videoSettings)
         case .reset:
             var videoSettings = await stream.videoSettings
             zeroBytesOutPerSecondCounts = 0
@@ -374,14 +229,100 @@ public final actor StreamVideoAdaptiveBitRateStrategy: StreamBitRateStrategy {
             effectiveMaxBitRate = mamimumVideoBitRate
             videoSettings.bitRate = mamimumVideoBitRate
             // 상태 초기화
-            currentVideoSize = .p1080
-            isBitRateDegraded = false
-            degradationWaitCounts = 0
             stableCounts = 0
-            if let initialSize = initialVideoSize {
-                videoSettings.videoSize = initialSize
-            }
             try? await stream.setVideoSettings(videoSettings)
         }
     }
+}
+
+extension StreamVideoAdaptiveBitRateStrategy {
+    
+    private func updateEmaVideoBytesPerSecond(currentBytesOutPerSecond: Int, audioBitRate: Int) {
+        let audioBytesPerSecond = max(audioBitRate / 8, 0)
+        let rawVideoBytesPerSecond = max(currentBytesOutPerSecond - audioBytesPerSecond, 0)
+        let current = Double(rawVideoBytesPerSecond)
+
+        if emaVideoBytesPerSecond <= 0 {
+            emaVideoBytesPerSecond = current
+        } else {
+            emaVideoBytesPerSecond = emaAlpha * current + (1.0 - emaAlpha) * emaVideoBytesPerSecond
+        }
+    }
+
+    private func queueDurationSeconds(queueBytes: Int, fallbackBitRate: Int) -> Double {
+        if emaVideoBytesPerSecond > 0 {
+            // EMA 기반 비디오 전송 속도로 큐 지연 추정
+            return Double(queueBytes) / emaVideoBytesPerSecond
+        }
+        // EMA 초기화 전에는 기존 비트레이트 기반 근사값 사용
+        guard fallbackBitRate > 0 else { return .infinity }
+        return Double(queueBytes * 8) / Double(fallbackBitRate)
+    }
+
+    private func dynamicReductionRatio(queueBytes: Int, fallbackBitRate: Int) -> Double {
+        let duration = queueDurationSeconds(queueBytes: queueBytes, fallbackBitRate: fallbackBitRate)
+        switch duration {
+        case ..<0.1: return 0.10   // 100ms 미만: 가벼운 감소
+        case ..<0.2: return 0.15   // 100~200ms: 기존 수준
+        case ..<0.5: return 0.25   // 200~500ms: 중간 감소
+        case ..<1.0: return 0.35   // 0.5~1s: 더 큰 감소
+        case ..<2.0: return 0.50   // 1~2s: 크게 감소
+        default:     return 0.70   // 2s 이상: 최대폭 감소
+        }
+    }
+
+    /// 대역폭 비율 계산
+    private func calculateBandwidthRatio(currentBytesOutPerSecond: Int, currentBitRate: Int) -> Double {
+        let currentBandwidth = currentBytesOutPerSecond * 8
+        return Double(currentBandwidth) / Double(currentBitRate)
+    }
+
+    /// 일시적 큐 증가인지 판단 (대역폭 충분하고 큐도 적당함)
+    private func isTemporaryQueueIncrease(bandwidthRatio: Double, queueBytes: Int) -> Bool {
+        return bandwidthRatio >= 0.8 && queueBytes <= congestionQueueBytesThreshold
+    }
+    
+    /// 비트레이트 감소 적용 (안정/비안정 상태에 따라)
+    private func applyBitrateReduction(
+        currentBitRate: Int,
+        queueBytes: Int,
+        queueDuration: Double,
+        isStable: Bool,
+        bandwidthRatio: Double
+    ) {
+        let queueTooLarge = queueBytes > congestionQueueBytesThreshold
+
+        if isStable {
+            // 안정 상태: 고정 15% 감소
+            let newBitRate = Int(Double(currentBitRate) * (1.0 - stableStateReductionRatio))
+            effectiveMaxBitRate = max(newBitRate, minVideoBitRate)
+            let targetBitRate = calculateRecoveryTargetBitRate()
+
+            if queueTooLarge {
+                print("[SL LOG][⚠️ 안정 상태 → 점진적 감소] 큐: \(queueBytes / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 감산율: \(Int(stableStateReductionRatio * 100))% → 비트레이트 조정: \(targetBitRate / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
+            } else {
+                print("[SL LOG][⚠️ 안정 상태 → 점진적 감소] 실제 대역폭: \(Int(bandwidthRatio * 100))% / 큐: \(String(format: "%.2f", queueDuration))s → 감산율: \(Int(stableStateReductionRatio * 100))% → 비트레이트 조정: \(targetBitRate / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
+            }
+
+            // 안정 상태에서는 stableCounts를 완전히 리셋 (비트레이트 감소 발생 시)
+            stableCounts = 0
+
+        } else {
+            // 비안정 상태: 큐 duration 기반 동적 감소
+            let reductionRatio = dynamicReductionRatio(queueBytes: queueBytes, fallbackBitRate: currentBitRate)
+            let newBitRate = Int(Double(currentBitRate) * (1.0 - reductionRatio))
+            effectiveMaxBitRate = max(newBitRate, minVideoBitRate)
+            let targetBitRate = calculateRecoveryTargetBitRate()
+
+            if queueTooLarge {
+                print("[SL LOG][❌ 큐 과다!!] 큐: \(queueBytes / 1024)KB (\(String(format: "%.2f", queueDuration))s) → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 조정: \(targetBitRate / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
+            } else {
+                print("[SL LOG][❌ 대역폭 부족!!] 실제 대역폭: \(Int(bandwidthRatio * 100))% / 큐: \(String(format: "%.2f", queueDuration))s → 감산율: \(Int(reductionRatio * 100))% → 비트레이트 조정: \(targetBitRate / 1000)Kbps | effectiveMaxBitRate: \(effectiveMaxBitRate / 1000)Kbps")
+            }
+
+            // 비안정 상태에서는 stableCounts를 완전히 리셋
+            stableCounts = 0
+        }
+    }
+
 }
