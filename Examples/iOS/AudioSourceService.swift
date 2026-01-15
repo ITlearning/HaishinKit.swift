@@ -18,11 +18,6 @@ struct AudioSource: Sendable, Hashable, Equatable, CustomStringConvertible {
 }
 
 actor AudioSourceService {
-    enum Mode: CaseIterable, Sendable {
-        case audioSource
-        case audioEngine
-    }
-
     enum Error: Swift.Error {
         case missingDataSource(_ source: AudioSource)
     }
@@ -33,7 +28,7 @@ actor AudioSourceService {
         }
     }
 
-    private(set) var mode: Mode = .audioEngine
+    private(set) var mode: AudioSourceServiceMode = .audioEngine
     private(set) var isRunning = false
     private(set) var sources: [AudioSource] = [] {
         didSet {
@@ -61,15 +56,15 @@ actor AudioSourceService {
         }
     }
 
-    func setUp(_ mode: Mode) {
+    func setUp(_ mode: AudioSourceServiceMode) {
         self.mode = mode
         do {
             let session = AVAudioSession.sharedInstance()
             // If you set the "mode" parameter, stereo capture is not possible, so it is left unspecified.
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
-            // It looks like this setting is required on iOS 18.5.
-            try session.setPreferredInputNumberOfChannels(2)
             try session.setActive(true)
+            // It looks like this setting is required on iOS 18.5.
+            try? session.setPreferredInputNumberOfChannels(2)
         } catch {
             logger.error(error)
         }
@@ -145,22 +140,57 @@ extension AudioSourceService: AsyncRunner {
             return
         }
         switch mode {
+        case .audioSource:
+            break
+        case .audioSourceWithStereo:
+            sources = makeAudioSources()
+            tasks.append(Task {
+                for await reason in NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification)
+                    .compactMap({ $0.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt })
+                    .compactMap({ AVAudioSession.RouteChangeReason(rawValue: $0) }) {
+                    logger.info("route change ->", reason.rawValue)
+                    sources = makeAudioSources()
+                }
+            })
         case .audioEngine:
             audioEngineCapture = AudioEngineCapture()
             audioEngineCapture?.startRunning()
             tasks.append(Task {
-                for await _ in NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification)
+                for await reason in NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification)
                     .compactMap({ $0.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt })
                     .compactMap({ AVAudioSession.RouteChangeReason(rawValue: $0) }) {
-                    audioEngineCapture?.startCaptureIfNeeded()
+                    // There are cases where it crashes when executed in situations other than attaching or detaching earphones. https://github.com/HaishinKit/HaishinKit.swift/issues/1863
+                    switch reason {
+                    case .newDeviceAvailable, .oldDeviceUnavailable:
+                        audioEngineCapture?.startCaptureIfNeeded()
+                    default: ()
+                    }
                 }
             })
-        case .audioSource:
             tasks.append(Task {
-                for await _ in NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification)
-                    .compactMap({ $0.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt })
-                    .compactMap({ AVAudioSession.RouteChangeReason(rawValue: $0) }) {
-                    sources = makeAudioSources()
+                for await notification in NotificationCenter.default.notifications(
+                    named: AVAudioSession.interruptionNotification,
+                    object: AVAudioSession.sharedInstance()
+                ) {
+                    guard
+                        let userInfo = notification.userInfo,
+                        let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+                        let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+                        return
+                    }
+                    switch type {
+                    case .began:
+                        logger.info("interruption began", notification)
+                    case .ended:
+                        logger.info("interruption end", notification)
+                        let optionsValue =
+                            userInfo[AVAudioSessionInterruptionOptionKey] as? UInt
+                        let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue ?? 0)
+                        if options.contains(.shouldResume) {
+                            audioEngineCapture?.startCaptureIfNeeded()
+                        }
+                    default: ()
+                    }
                 }
             })
         }
@@ -172,9 +202,7 @@ extension AudioSourceService: AsyncRunner {
             return
         }
         audioEngineCapture?.stopRunning()
-        for task in tasks {
-            task.cancel()
-        }
+        tasks.forEach { $0.cancel() }
         tasks.removeAll()
         isRunning = false
     }
